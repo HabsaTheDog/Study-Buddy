@@ -1,0 +1,17 @@
+.env
+.env.*
+!.env.example
+.venv/
+__pycache__/
+*.py[cod]
+
+node_modules/
+
+state/*
+!state/.gitkeep
+data/moodle/
+
+output/*
+!output/README.md
+!output/example-answers.json
+!output/example-multiple-choice-answers.json

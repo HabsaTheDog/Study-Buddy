@@ -1,0 +1,17 @@
+{
+  "answers": [
+    {
+      "question_index": 1,
+      "answer": ["Richtig"],
+      "confidence": 1.0,
+      "citations": [
+        {
+          "title": "Moodle Beispielkurs visible multiple-choice question",
+          "kind": "moodle_page",
+          "section": "Frage 1"
+        }
+      ],
+      "risk_flags": []
+    }
+  ]
+}

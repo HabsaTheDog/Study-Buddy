@@ -1,0 +1,30 @@
+{
+  "answers": [
+    {
+      "question_index": 1,
+      "answer": "4 cm^2",
+      "confidence": 1.0,
+      "citations": [
+        {
+          "title": "Moodle Beispielkurs visible question",
+          "kind": "moodle_page",
+          "section": "Frage 1"
+        }
+      ],
+      "risk_flags": []
+    },
+    {
+      "question_index": 2,
+      "answer": "8",
+      "confidence": 1.0,
+      "citations": [
+        {
+          "title": "Moodle Beispielkurs visible question",
+          "kind": "moodle_page",
+          "section": "Frage 2"
+        }
+      ],
+      "risk_flags": []
+    }
+  ]
+}

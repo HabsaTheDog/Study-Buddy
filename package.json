@@ -1,0 +1,18 @@
+{
+  "name": "uni-agent-study-buddy",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local Codex CLI workspace for a FH Technikum Wien Moodle assistant.",
+  "scripts": {
+    "browser:install": "agent-browser install",
+    "browser:install:linux-deps": "agent-browser install --with-deps",
+    "moodle:login": "scripts/moodle_login.sh",
+    "moodle:snapshot": "scripts/moodle_snapshot.sh",
+    "moodle:courses": "scripts/moodle_course_index.sh",
+    "quiz:assist": "scripts/quiz_assist.sh",
+    "test": "python3 -m compileall src scripts"
+  },
+  "dependencies": {
+    "agent-browser": "^0.26.0"
+  }
+}
