@@ -1,0 +1,171 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "title",
+    "course",
+    "topic",
+    "audience",
+    "language",
+    "generated_at",
+    "exam_focus",
+    "topic_map",
+    "learning_path",
+    "formula_cards",
+    "problem_solving_methods",
+    "practice_plan",
+    "self_check",
+    "common_mistakes",
+    "source_map",
+    "source_notes",
+    "warnings",
+    "risk_flags"
+  ],
+  "properties": {
+    "title": { "type": "string" },
+    "course": { "type": ["string", "null"] },
+    "topic": { "type": "string" },
+    "audience": { "type": "string" },
+    "language": { "type": "string" },
+    "generated_at": { "type": "string" },
+    "exam_focus": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["exam_scope_summary", "how_to_use_this_guide", "highest_priority_topics", "assumed_prior_knowledge"],
+      "properties": {
+        "exam_scope_summary": { "type": "string" },
+        "how_to_use_this_guide": { "type": "array", "items": { "type": "string" } },
+        "highest_priority_topics": { "type": "array", "items": { "type": "string" } },
+        "assumed_prior_knowledge": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "topic_map": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "priority", "what_it_is", "what_you_must_be_able_to_do", "subtopics", "typical_exam_tasks", "learning_checks", "source_ids"],
+        "properties": {
+          "name": { "type": "string" },
+          "priority": { "type": "string", "enum": ["high", "medium", "low"] },
+          "what_it_is": { "type": "string" },
+          "what_you_must_be_able_to_do": { "type": "array", "items": { "type": "string" } },
+          "subtopics": { "type": "array", "items": { "type": "string" } },
+          "typical_exam_tasks": { "type": "array", "items": { "type": "string" } },
+          "learning_checks": { "type": "array", "items": { "type": "string" } },
+          "source_ids": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "learning_path": { "type": "array", "items": { "$ref": "#/$defs/learning_path_item" } },
+    "formula_cards": { "type": "array", "items": { "$ref": "#/$defs/formula_card" } },
+    "problem_solving_methods": { "type": "array", "items": { "$ref": "#/$defs/problem_method" } },
+    "practice_plan": { "type": "array", "items": { "$ref": "#/$defs/practice_item" } },
+    "self_check": { "type": "array", "items": { "$ref": "#/$defs/self_check_item" } },
+    "common_mistakes": { "type": "array", "items": { "$ref": "#/$defs/common_mistake" } },
+    "source_map": { "type": "array", "items": { "$ref": "#/$defs/source_map_item" } },
+    "source_notes": { "type": "array", "items": { "$ref": "#/$defs/citation" } },
+    "warnings": { "type": "array", "items": { "type": "string" } },
+    "risk_flags": { "type": "array", "items": { "type": "string" } }
+  },
+  "$defs": {
+    "learning_path_item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["phase", "duration", "goal", "tasks", "output"],
+      "properties": {
+        "phase": { "type": "string" },
+        "duration": { "type": "string" },
+        "goal": { "type": "string" },
+        "tasks": { "type": "array", "items": { "type": "string" } },
+        "output": { "type": "string" }
+      }
+    },
+    "formula_card": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "formula", "variables", "when_to_use", "warning", "source_ids"],
+      "properties": {
+        "name": { "type": "string" },
+        "formula": { "type": "string" },
+        "variables": { "type": "array", "items": { "type": "string" } },
+        "when_to_use": { "type": "string" },
+        "warning": { "type": ["string", "null"] },
+        "source_ids": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "problem_method": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "applies_to", "steps", "common_traps", "source_ids"],
+      "properties": {
+        "name": { "type": "string" },
+        "applies_to": { "type": "array", "items": { "type": "string" } },
+        "steps": { "type": "array", "items": { "type": "string" } },
+        "common_traps": { "type": "array", "items": { "type": "string" } },
+        "source_ids": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "practice_item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["block", "tasks", "success_criteria", "source_ids"],
+      "properties": {
+        "block": { "type": "string" },
+        "tasks": { "type": "array", "items": { "type": "string" } },
+        "success_criteria": { "type": "array", "items": { "type": "string" } },
+        "source_ids": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "self_check_item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["question", "expected_answer", "topic", "source_ids"],
+      "properties": {
+        "question": { "type": "string" },
+        "expected_answer": { "type": "string" },
+        "topic": { "type": "string" },
+        "source_ids": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "common_mistake": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mistake", "why_it_happens", "how_to_avoid", "source_ids"],
+      "properties": {
+        "mistake": { "type": "string" },
+        "why_it_happens": { "type": "string" },
+        "how_to_avoid": { "type": "string" },
+        "source_ids": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "source_map_item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title", "path", "url", "page", "section", "role"],
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "path": { "type": ["string", "null"] },
+        "url": { "type": ["string", "null"] },
+        "page": { "type": ["integer", "null"] },
+        "section": { "type": ["string", "null"] },
+        "role": { "type": "string" }
+      }
+    },
+    "citation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["title", "kind", "url", "path", "page", "section"],
+      "properties": {
+        "title": { "type": "string" },
+        "kind": { "type": "string", "enum": ["pdf", "moodle_page", "assignment", "local_file"] },
+        "url": { "type": ["string", "null"] },
+        "path": { "type": ["string", "null"] },
+        "page": { "type": ["integer", "null"] },
+        "section": { "type": ["string", "null"] }
+      }
+    }
+  }
+}

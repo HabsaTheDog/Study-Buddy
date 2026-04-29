@@ -6,6 +6,8 @@ This repository is the local Codex CLI workspace for the FH Technikum Wien Moodl
 
 Help the user work with Moodle course material, lecture documents, notes, summaries, assignments, and Moodle quizzes. Prefer token-efficient browser automation and small, auditable work products.
 
+Your job is to complete the user's current Study Buddy task, not merely explain how it could be done. Preserve the newest user intent when context is long or has been compacted: identify the latest concrete request, choose the matching local tool, run it, inspect its output, and only then answer.
+
 When the user gives a basic task prompt such as "do the next math quiz", "find my next quiz", or "bearbeite den Mathe-Test", do not stop at a generic refusal or explanation. Use the local prompt runner first:
 
 ```bash
@@ -13,6 +15,37 @@ scripts/study_buddy.sh "<user prompt>"
 ```
 
 The prompt runner is the default high-level interface. It can find likely Moodle courses/quizzes, inspect attemptability, create isolated subagent packets with extracted text/screenshots, fill validated Moodle controls, continue through quiz pages, and stop before final submission.
+
+If the prompt runner returns `clarification`, `unsupported`, or cannot map the request, inspect the output directory it prints. Then continue with the most specific local tool below instead of falling back to a generic answer.
+
+## Task Routing Rules
+
+Use this routing before writing a response:
+
+1. Quiz/test attempt or quiz discovery:
+   - Natural language: `scripts/study_buddy.sh "<prompt>"`
+   - Direct quiz URL: `scripts/quiz_assist.sh "<quiz-url>" --fill-safe --auto-answer`
+2. Study documents, summaries, Lernzettel, notes, Stoffuebersicht, exam guides:
+   - `scripts/study_doc.sh "<prompt>" --mode auto`
+3. Formula sheets, cheat sheets, Formelsammlung, Spickzettel:
+   - `scripts/study_doc.sh "<prompt>" --mode cheat-sheet`
+4. Assignment briefs or task extraction:
+   - `scripts/study_doc.sh "<prompt>" --mode assignment-brief`
+5. If no tool supports the request:
+   - Use local Moodle files under `data/moodle/` and write an auditable artifact under `output/`.
+   - Still cite Moodle pages/PDFs/local documents.
+
+Do not answer from memory while a local tool can inspect Moodle state, course files, quiz pages, or existing indexes.
+
+## Context Management Rules
+
+- At the start of each turn, restate the active task internally as: user goal, target course/topic if any, expected artifact, and safety constraints.
+- Prefer the latest user message over older thread context. Older context is supporting evidence only.
+- When continuing after a tool run, read the printed `Output:` path before deciding the next step.
+- If a tool creates a request directory with `clarification.md`, inspect it and either follow its suggested next command or use the closest specialized script.
+- Keep generated artifacts in `output/` and reference their exact path in the final response.
+- If a previous assistant produced the wrong artifact, correct course by using the routing rules above; do not defend or repeat the earlier path.
+- When the request is in German, produce the user-facing artifact in German unless the source material or user explicitly asks otherwise.
 
 ## Non-Negotiable Safety Rules
 
@@ -74,6 +107,8 @@ Use batch commands when possible to reduce process overhead.
 Use these defaults in fresh contexts:
 
 - For natural-language requests, run `scripts/study_buddy.sh "<prompt>"`.
+- For study documents and learning artifacts, prefer `scripts/study_doc.sh` after the first runner attempt or directly when the prompt is clearly a document request.
+- For "Formelsammlung", "formula sheet", "cheat sheet", or "Spickzettel", run `scripts/study_doc.sh "<prompt>" --mode cheat-sheet`.
 - For "do/fill/solve/bearbeite" quiz prompts, the prompt runner auto-enables answer generation.
 - For direct quiz URLs, use `scripts/quiz_assist.sh "<quiz-url>" --fill-safe --auto-answer`.
 - Do not add `--max-pages 1` unless the user explicitly asks for a one-page test.
@@ -85,6 +120,8 @@ Canonical examples:
 ```bash
 scripts/study_buddy.sh "do the next math quiz"
 scripts/study_buddy.sh "bearbeite den nächsten Mathe-Test"
+scripts/study_doc.sh "erstelle eine Formelsammlung für DYN2" --mode cheat-sheet
+scripts/study_doc.sh "erstelle einen Lernzettel für Integralrechnung" --mode auto
 scripts/quiz_assist.sh "https://moodle.technikum-wien.at/mod/quiz/view.php?id=..." --fill-safe --auto-answer
 ```
 

@@ -104,6 +104,30 @@ def discover_material_links(course_limit: int | None = None) -> list[dict]:
     return discovered
 
 
+def discover_material_links_for_course(course: dict) -> dict:
+    browser = AgentBrowser()
+    browser.open(course["url"])
+    browser.wait_load()
+    try:
+        links = browser.eval_json(MATERIAL_LINKS_JS)
+    except AgentBrowserError as exc:
+        return {
+            "course_id": course.get("id"),
+            "course_title": course.get("title"),
+            "course_url": course.get("url"),
+            "retrieved_at": utc_now(),
+            "error": str(exc),
+            "links": [],
+        }
+    return {
+        "course_id": course.get("id"),
+        "course_title": course.get("title"),
+        "course_url": course.get("url"),
+        "retrieved_at": utc_now(),
+        "links": links,
+    }
+
+
 def _safe_material_path(course_title: str, url: str, content_type: str, title: str) -> Path:
     parsed = urlparse(url)
     name = Path(parsed.path).name or slugify(title, "material")
@@ -219,6 +243,59 @@ def download_materials(download_limit: int = 0, course_limit: int | None = None,
             "download_limit": download_limit,
             "downloaded": downloaded,
             "courses": discovered,
+        },
+    )
+    refresh_document_index()
+    return target
+
+
+def download_course_materials(course: dict, download_limit: int = 80, max_bytes: int = 20_000_000) -> Path:
+    discovered_course = discover_material_links_for_course(course)
+    downloaded = 0
+    browser = AgentBrowser()
+
+    for link in discovered_course.get("links", []):
+        if download_limit <= 0 or downloaded >= download_limit:
+            continue
+        hint = str(link.get("content_hint", "")).lower()
+        url = str(link.get("url", "")).lower()
+        if hint == "quiz":
+            continue
+        if not any(
+            token in url
+            for token in ["/mod/resource/", "/pluginfile.php", ".pdf", ".doc", ".ppt", ".xls", ".zip"]
+        ):
+            continue
+        try:
+            updated = _download_with_browser(browser, link, course.get("title") or course.get("course_title") or "course", max_bytes)
+            link.update(updated)
+            if updated.get("download", {}).get("ok"):
+                downloaded += 1
+        except Exception as exc:
+            link["download"] = {"ok": False, "error": str(exc)}
+
+    material_index = read_json(ROOT / "state" / "material_links.json", default={})
+    courses = material_index.get("courses", []) if isinstance(material_index, dict) else []
+    course_id = str(course.get("id") or discovered_course.get("course_id") or "")
+    merged: list[dict] = []
+    replaced = False
+    for existing in courses:
+        if str(existing.get("course_id") or "") == course_id and course_id:
+            merged.append(discovered_course)
+            replaced = True
+        else:
+            merged.append(existing)
+    if not replaced:
+        merged.append(discovered_course)
+
+    target = ROOT / "state" / "material_links.json"
+    write_json(
+        target,
+        {
+            "generated_at": utc_now(),
+            "download_limit": download_limit,
+            "downloaded": downloaded,
+            "courses": merged,
         },
     )
     refresh_document_index()

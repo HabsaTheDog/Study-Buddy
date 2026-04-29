@@ -12,6 +12,7 @@ from .courses import index_courses
 from .documents import MATERIAL_LINKS_JS
 from .quiz import assist_quiz, fill_quiz
 from .storage import ROOT, read_json, slugify, utc_now, write_json
+from .study_docs import generate_study_document
 
 
 COURSE_HINTS = {
@@ -58,6 +59,9 @@ def run_prompt(
         auto_answer = True
     request_dir = _new_request_dir(prompt_clean)
 
+    if _looks_like_study_doc_request(prompt_lower):
+        return _handle_study_doc_prompt(prompt_clean, request_dir=request_dir)
+
     if _looks_like_quiz_request(prompt_lower):
         return _handle_quiz_prompt(
             prompt_clean,
@@ -80,7 +84,34 @@ def run_prompt(
 
 
 def _looks_like_quiz_request(prompt_lower: str) -> bool:
+    if _looks_like_study_doc_request(prompt_lower) and not _looks_like_do_request(prompt_lower):
+        return False
     return any(term in prompt_lower for term in ["quiz", "test", "aufgabe", "assignment"])
+
+
+def _looks_like_study_doc_request(prompt_lower: str) -> bool:
+    return any(
+        term in prompt_lower
+        for term in [
+            "study guide",
+            "summary",
+            "summarize",
+            "topic summary",
+            "notes",
+            "revision guide",
+            "cheat sheet",
+            "formula sheet",
+            "lernzettel",
+            "zusammenfassung",
+            "formelsammlung",
+            "spickzettel",
+            "lernhilfe",
+            "stoffübersicht",
+            "stoffuebersicht",
+            "themenübersicht",
+            "themenuebersicht",
+        ]
+    )
 
 
 def _looks_like_do_request(prompt_lower: str) -> bool:
@@ -100,6 +131,22 @@ def _looks_like_do_request(prompt_lower: str) -> bool:
             "loesen",
             "bearbeit",
         ]
+    )
+
+
+def _handle_study_doc_prompt(prompt: str, *, request_dir: Path) -> PromptResult:
+    run_dir = generate_study_document(
+        prompt,
+        request_dir=request_dir,
+        output_format="markdown+pdf",
+        style="academic_study_guide",
+    )
+    payload = read_json(run_dir / "request.json", default={})
+    status = payload.get("status") or "completed"
+    return PromptResult(
+        "study-document" if status == "completed" else str(status),
+        f"Generated study document with status {status}",
+        run_dir,
     )
 
 

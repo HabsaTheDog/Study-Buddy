@@ -43,6 +43,7 @@ def ensure_dirs() -> None:
         ROOT / "output" / "course-summaries",
         ROOT / "output" / "quiz-runs",
         ROOT / "output" / "subagent-runs",
+        ROOT / "output" / "study-docs",
         ROOT / "output" / "notes",
         ROOT / "state",
         ROOT / "state" / "browser",

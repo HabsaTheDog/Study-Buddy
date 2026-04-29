@@ -7,6 +7,7 @@ from .documents import download_materials, refresh_document_index
 from .moodle import login, snapshot
 from .quiz import assist_quiz, fill_quiz
 from .storage import ROOT, ensure_dirs
+from .study_docs import generate_study_document
 
 
 def main() -> None:
@@ -24,6 +25,20 @@ def main() -> None:
     materials_parser.add_argument("--course-limit", type=int, default=0)
 
     subparsers.add_parser("documents")
+
+    study_doc_parser = subparsers.add_parser("study-doc")
+    study_doc_parser.add_argument("prompt", nargs="+")
+    study_doc_parser.add_argument(
+        "--format",
+        default="markdown+pdf",
+        choices=["markdown+pdf", "markdown", "typst", "pdf"],
+    )
+    study_doc_parser.add_argument("--style", default="academic-study-guide")
+    study_doc_parser.add_argument(
+        "--mode",
+        default="auto",
+        choices=["auto", "exam-study-guide", "summary", "cheat-sheet", "assignment-brief", "generic"],
+    )
 
     quiz_parser = subparsers.add_parser("quiz")
     quiz_parser.add_argument("url")
@@ -68,6 +83,14 @@ def main() -> None:
     elif args.command == "documents":
         target = refresh_document_index()
         print(f"Wrote {target.relative_to(target.parents[1])}")
+    elif args.command == "study-doc":
+        run_dir = generate_study_document(
+            " ".join(args.prompt),
+            output_format=args.format,
+            style=args.style,
+            mode=args.mode,
+        )
+        print(f"Wrote study document to {run_dir}")
     elif args.command == "quiz":
         if args.fill_safe:
             if not args.answers and not args.auto_answer:
