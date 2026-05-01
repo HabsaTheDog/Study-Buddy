@@ -9,6 +9,7 @@
     "moodle:login": "scripts/moodle_login.sh",
     "moodle:snapshot": "scripts/moodle_snapshot.sh",
     "moodle:courses": "scripts/moodle_course_index.sh",
+    "moodle:sync": "scripts/moodle_sync.sh",
     "quiz:assist": "scripts/quiz_assist.sh",
     "test": "python3 -m compileall src scripts"
   },

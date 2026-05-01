@@ -8,6 +8,7 @@ from .moodle import login, snapshot
 from .quiz import assist_quiz, fill_quiz
 from .storage import ROOT, ensure_dirs
 from .study_docs import generate_study_document
+from .sync import sync_moodle
 
 
 def main() -> None:
@@ -25,6 +26,19 @@ def main() -> None:
     materials_parser.add_argument("--course-limit", type=int, default=0)
 
     subparsers.add_parser("documents")
+
+    sync_parser = subparsers.add_parser("sync")
+    sync_parser.add_argument("--course-limit", type=int, default=0)
+    sync_parser.add_argument("--download", action="store_true", help="Compatibility flag. Downloads are enabled by default.")
+    sync_parser.add_argument("--no-download", action="store_true")
+    sync_parser.add_argument("--incremental", action="store_true", help="Keep existing material cache and merge indexes instead of starting clean.")
+    sync_parser.add_argument(
+        "--download-limit-per-course",
+        type=int,
+        default=0,
+        help="Maximum files to download per course. 0 means unlimited.",
+    )
+    sync_parser.add_argument("--max-bytes-per-file", type=int, default=100_000_000)
 
     study_doc_parser = subparsers.add_parser("study-doc")
     study_doc_parser.add_argument("prompt", nargs="+")
@@ -83,6 +97,15 @@ def main() -> None:
     elif args.command == "documents":
         target = refresh_document_index()
         print(f"Wrote {target.relative_to(target.parents[1])}")
+    elif args.command == "sync":
+        run_dir = sync_moodle(
+            course_limit=args.course_limit or None,
+            download=not args.no_download,
+            download_limit_per_course=args.download_limit_per_course,
+            max_bytes_per_file=args.max_bytes_per_file,
+            clean=not args.incremental,
+        )
+        print(f"Wrote Moodle sync report to {run_dir}")
     elif args.command == "study-doc":
         run_dir = generate_study_document(
             " ".join(args.prompt),

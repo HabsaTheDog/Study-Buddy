@@ -6,11 +6,13 @@ __all__ = [
     "citations",
     "courses",
     "documents",
+    "knowledge",
     "moodle",
     "orchestrator",
     "quiz",
     "safety",
     "storage",
+    "sync",
     "subagents",
     "types",
 ]

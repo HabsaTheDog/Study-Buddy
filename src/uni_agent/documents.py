@@ -7,6 +7,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from .browser import AgentBrowser, AgentBrowserError
+from .knowledge import load_synced_courses
 from .storage import ROOT, read_json, slugify, utc_now, write_json
 
 
@@ -67,9 +68,11 @@ MATERIAL_LINKS_JS = r"""
 """
 
 
-def discover_material_links(course_limit: int | None = None) -> list[dict]:
-    course_index = read_json(ROOT / "state" / "course_index.json", default={})
-    courses = course_index.get("courses", [])
+def discover_material_links(
+    course_limit: int | None = None,
+    courses: list[dict] | None = None,
+) -> list[dict]:
+    courses = courses if courses is not None else load_synced_courses()
     if course_limit is not None and course_limit > 0:
         courses = courses[:course_limit]
 
@@ -216,7 +219,7 @@ def download_materials(download_limit: int = 0, course_limit: int | None = None,
 
     for course in discovered:
         for link in course.get("links", []):
-            if download_limit <= 0 or downloaded >= download_limit:
+            if download_limit > 0 and downloaded >= download_limit:
                 continue
             hint = str(link.get("content_hint", "")).lower()
             url = str(link.get("url", "")).lower()
@@ -255,7 +258,7 @@ def download_course_materials(course: dict, download_limit: int = 80, max_bytes:
     browser = AgentBrowser()
 
     for link in discovered_course.get("links", []):
-        if download_limit <= 0 or downloaded >= download_limit:
+        if download_limit > 0 and downloaded >= download_limit:
             continue
         hint = str(link.get("content_hint", "")).lower()
         url = str(link.get("url", "")).lower()

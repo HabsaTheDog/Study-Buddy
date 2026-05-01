@@ -38,6 +38,8 @@ Create a local `.env` from `.env.example`. `.env` is ignored by Git.
 scripts/moodle_login.sh
 scripts/moodle_snapshot.sh https://moodle.technikum-wien.at/my/
 scripts/moodle_course_index.sh
+scripts/moodle_sync.sh
+scripts/moodle_sync.sh --no-download
 scripts/moodle_download_materials.sh --course-limit 3 --download-limit 5
 scripts/study_buddy.sh "find the next math quiz"
 scripts/study_buddy.sh "do the next math quiz"
@@ -56,11 +58,60 @@ scripts/quiz_assist.sh <quiz-url> --fill-safe --answers output/example-answers.j
 
 `scripts/study_buddy.sh` accepts natural-language prompts and maps them to Moodle actions. It can identify likely courses and quizzes from prompts like `next math quiz`, inspect a selected quiz, create an answer template, ask subagents to answer questions from extracted text/screenshots, or fill a quiz from a provided answer JSON.
 
+The prompt runner prefers the synced course cards in
+`state/course_agent_cards.json` when routing a prompt to a Moodle course or
+known quiz/activity URL. If no sync exists, it falls back to the older course
+indexing path and can trigger a fast metadata-only sync when no course index is
+available.
+
 `--auto-answer` now creates one isolated packet per visible question under `output/subagent-runs/`. Each packet contains extracted question text, visible controls/options, Moodle page metadata, local source excerpts, and a page screenshot. By default the runner calls `codex exec` as a read-only subagent when available. Set `SUBAGENT_SOLVER_COMMAND` to a custom command, or set it to `off` to only generate packets and leave questions unfilled.
 
 Quiz filling defaults to a `--max-pages` cap of 100, so it attempts the whole quiz until Moodle has no safe next-page navigation left. Lower this value only for testing.
 
 If the prompt is ambiguous, it writes a clarification request under `output/requests/` with the likely course/quiz choices and exact next commands.
+
+## Moodle Sync
+
+`scripts/moodle_sync.sh` is the one-command live Moodle refresh. It logs in,
+indexes all visible Moodle courses, opens each course page, extracts compact
+activity/resource links, downloads accessible course files, refreshes the local
+document index, and writes agent course cards.
+
+Default sync is a clean full refresh: it removes previous sync metadata, clears
+the downloaded Moodle material cache, downloads accessible files/resources again,
+and rebuilds the document index from the fresh cache. Moodle remains the source
+of truth for live state such as current quizzes, deadlines, assignments, and
+visible page content. Use `--no-download` for a fast metadata-only refresh, or
+`--incremental` to keep the existing material cache.
+
+Other tools consume the sync output as their compact course map:
+
+- `study_buddy.sh` uses course cards for course/quiz routing.
+- `study_doc.sh` uses course cards to choose the target course, then uses the
+  local document index for source excerpts.
+- Quiz subagent packets include the matching course card context when available.
+
+Outputs are written under:
+
+```text
+output/sync-runs/<timestamp>_moodle-sync/
+state/moodle_sync_summary.json
+state/course_agent_cards.json
+state/course_index.json
+state/material_links.json
+state/document_index.json
+```
+
+Useful commands:
+
+```bash
+scripts/moodle_sync.sh
+scripts/moodle_sync.sh --course-limit 3
+scripts/moodle_sync.sh --no-download
+scripts/moodle_sync.sh --incremental
+scripts/moodle_sync.sh --download-limit-per-course 20
+python3 -m uni_agent.orchestrator sync
+```
 
 ## Study Documents and PDFs
 

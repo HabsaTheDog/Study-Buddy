@@ -10,6 +10,7 @@ from typing import Any
 from .browser import AgentBrowser
 from .courses import index_courses
 from .documents import MATERIAL_LINKS_JS
+from .knowledge import load_synced_courses
 from .quiz import assist_quiz, fill_quiz
 from .storage import ROOT, read_json, slugify, utc_now, write_json
 from .study_docs import generate_study_document
@@ -290,9 +291,7 @@ def _handle_quiz_prompt(
 
 
 def _load_or_index_courses() -> list[dict[str, Any]]:
-    index_path = ROOT / "state" / "course_index.json"
-    data = read_json(index_path, default={})
-    courses = data.get("courses") or []
+    courses = load_synced_courses(refresh_if_missing=True)
     if courses:
         return courses
     return [course.__dict__ for course in index_courses()]
@@ -357,6 +356,20 @@ def _terms_from_prompt(prompt_lower: str) -> list[str]:
 
 
 def _discover_quizzes_for_course(course: dict[str, Any]) -> list[dict[str, Any]]:
+    card_quizzes = course.get("quizzes") if isinstance(course.get("quizzes"), list) else []
+    if card_quizzes:
+        return [
+            {
+                "title": str(quiz.get("title") or quiz.get("url") or "Untitled quiz"),
+                "url": quiz.get("url"),
+                "content_hint": quiz.get("content_hint") or "quiz",
+                "course_id": course.get("id"),
+                "course_title": course.get("title"),
+                "source": "course_agent_cards",
+            }
+            for quiz in card_quizzes
+            if quiz.get("url")
+        ]
     browser = AgentBrowser()
     browser.open(course["url"])
     browser.wait_load()

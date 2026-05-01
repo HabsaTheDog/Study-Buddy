@@ -18,6 +18,24 @@ The prompt runner is the default high-level interface. It can find likely Moodle
 
 If the prompt runner returns `clarification`, `unsupported`, or cannot map the request, inspect the output directory it prints. Then continue with the most specific local tool below instead of falling back to a generic answer.
 
+## Moodle Knowledge Baseline
+
+The default repository knowledge baseline is produced by:
+
+```bash
+scripts/moodle_sync.sh
+```
+
+This sync logs in, indexes visible Moodle courses, opens each course page, downloads accessible course resources, refreshes `state/document_index.json`, and writes compact course cards to `state/course_agent_cards.json`. By default it is a clean full refresh: previous sync metadata and downloaded Moodle material cache are removed before rebuilding. Use `--incremental` only when the user explicitly wants to keep the existing cache.
+
+Use this baseline before ad hoc browsing:
+
+- For course/task routing, first inspect `state/course_agent_cards.json` or the generated course cards under `output/sync-runs/.../course-cards/`.
+- For current availability, quiz attempt state, deadlines, and visible Moodle page content, still open Moodle live with `agent-browser`; the sync is orientation, not final truth for live state.
+- For heavy source content such as PDFs/slides, prefer the local cache under `data/moodle/materials/` and `state/document_index.json`.
+- If a task cannot be mapped because the indexes are missing or stale, run `scripts/moodle_sync.sh` before asking the user for clarification. Some high-level tools may automatically run a metadata-only sync when no course index exists.
+- Use `scripts/moodle_sync.sh --no-download` only when the user explicitly wants a fast metadata-only refresh. Use `--incremental` only when the user explicitly wants to preserve previously downloaded files.
+
 ## Task Routing Rules
 
 Use this routing before writing a response:
@@ -32,7 +50,8 @@ Use this routing before writing a response:
 4. Assignment briefs or task extraction:
    - `scripts/study_doc.sh "<prompt>" --mode assignment-brief`
 5. If no tool supports the request:
-   - Use local Moodle files under `data/moodle/` and write an auditable artifact under `output/`.
+   - Inspect `state/course_agent_cards.json`, `state/moodle_sync_summary.json`, and local Moodle files under `data/moodle/`.
+   - If needed, run `scripts/moodle_sync.sh` to refresh the baseline, then write an auditable artifact under `output/`.
    - Still cite Moodle pages/PDFs/local documents.
 
 Do not answer from memory while a local tool can inspect Moodle state, course files, quiz pages, or existing indexes.
@@ -107,6 +126,7 @@ Use batch commands when possible to reduce process overhead.
 Use these defaults in fresh contexts:
 
 - For natural-language requests, run `scripts/study_buddy.sh "<prompt>"`.
+- Before manual course selection, use the synced course cards in `state/course_agent_cards.json` as the compact map of known Moodle courses and activity/resource links.
 - For study documents and learning artifacts, prefer `scripts/study_doc.sh` after the first runner attempt or directly when the prompt is clearly a document request.
 - For "Formelsammlung", "formula sheet", "cheat sheet", or "Spickzettel", run `scripts/study_doc.sh "<prompt>" --mode cheat-sheet`.
 - For "do/fill/solve/bearbeite" quiz prompts, the prompt runner auto-enables answer generation.
@@ -128,11 +148,12 @@ scripts/quiz_assist.sh "https://moodle.technikum-wien.at/mod/quiz/view.php?id=..
 ## Moodle Course Workflow
 
 1. Login from `.env`.
-2. Navigate to `https://moodle.technikum-wien.at/my/`.
-3. Index visible courses and course URLs into `state/course_index.json`.
+2. Run `scripts/moodle_sync.sh` for the normal full refresh.
+3. The sync navigates to `https://moodle.technikum-wien.at/my/`, indexes visible courses into `state/course_index.json`, visits each course, and stores compact routing knowledge in `state/course_agent_cards.json`.
 4. For each course, collect visible sections, resources, files, assignments, deadlines, announcements, and quizzes.
-5. Download only accessible course files into `data/moodle/materials/`.
-6. Store source metadata with course, title, URL, local path, retrieval timestamp, and page numbers when available.
+5. Download accessible course files into `data/moodle/materials/` unless the user requested `--no-download`.
+6. Refresh `state/document_index.json` so study documents and quiz subagents can retrieve source excerpts with page numbers.
+7. Treat Moodle live pages as the source of truth for current state; treat local files as a cache for document contents.
 
 ## Source and Citation Rules
 

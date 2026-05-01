@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from .knowledge import load_synced_courses
 from .storage import ROOT, env_with_dotenv, read_json, slugify, utc_now, write_json
 from .typst import compile_typst_pdf, write_study_guide_typst
 
@@ -201,8 +202,7 @@ def _document_kind(prompt: str, style: str, *, mode: str = "auto") -> str:
 
 
 def _select_course(prompt: str) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
-    index = read_json(ROOT / "state" / "course_index.json", default={})
-    courses = index.get("courses", []) if isinstance(index, dict) else []
+    courses = load_synced_courses(refresh_if_missing=True)
     ranked = _rank_courses(prompt, courses)
     if not ranked:
         return None, []

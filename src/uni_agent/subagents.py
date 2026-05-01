@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .browser import AgentBrowser
+from .knowledge import course_brief_for_url, course_briefs_for_prompt
 from .storage import ROOT, env_with_dotenv, read_json, slugify, utc_now, write_json
 
 
@@ -146,6 +147,11 @@ def _build_question_packet(
     question_screenshot_path: Path | None = None,
 ) -> dict[str, Any]:
     visible_options = _visible_options(question)
+    course_context = course_brief_for_url(str(page.get("url") or "")) or None
+    related_courses = course_briefs_for_prompt(
+        f"{page.get('title') or ''}\n{question.get('prompt') or ''}\n{question.get('visible_context') or ''}",
+        limit=3,
+    )
     return {
         "captured_at": utc_now(),
         "task": "answer_one_visible_moodle_quiz_question",
@@ -171,6 +177,8 @@ def _build_question_packet(
             "screenshot": page_packet.get("screenshot"),
             "screenshots": page_packet.get("screenshots", {}),
         },
+        "moodle_course_context": course_context,
+        "related_synced_courses": related_courses,
         "question": {
             "question_id": question.get("question_id"),
             "question_index": question.get("question_index"),
