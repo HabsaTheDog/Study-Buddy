@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from .browser import AgentBrowser
 from .safety import find_submit_risks, should_use_review_only
-from .storage import ROOT, read_json, slugify, utc_now, write_json
+from .storage import create_output_run_dir, read_json, utc_now, write_json
 from .subagents import generate_answer_specs
 
 
@@ -127,10 +126,7 @@ def assist_quiz(url: str) -> Path:
     if submit_risks:
         risk_flags.extend([f"submit-control-visible:{risk}" for risk in submit_risks])
 
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H%M")
-    slug = slugify(page.get("title") or "quiz")
-    run_dir = ROOT / "output" / "quiz-runs" / f"{timestamp}_{slug}"
-    run_dir.mkdir(parents=True, exist_ok=True)
+    run_dir = create_output_run_dir("quiz-review", page.get("title") or "quiz")
 
     write_json(
         run_dir / "questions.json",
@@ -216,6 +212,9 @@ def fill_quiz(
         browser.open(first_page_url)
         browser.wait_load()
 
+    initial_page = browser.eval_json(QUESTION_EXTRACTION_JS)
+    run_dir = create_output_run_dir("quiz-fill", initial_page.get("title") or "quiz")
+
     all_results: list[dict[str, Any]] = []
     final_risk_flags: list[str] = []
     review_only = False
@@ -238,8 +237,7 @@ def fill_quiz(
             review_only = False
 
         if auto_answer and subagent_packet_root is None:
-            timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
-            subagent_packet_root = ROOT / "output" / "subagent-runs" / f"{timestamp}_{slugify(page.get('title') or 'quiz')}"
+            subagent_packet_root = run_dir / "subagent-packets"
 
         page_answers = (
             generate_answer_specs(
@@ -287,6 +285,7 @@ def fill_quiz(
         ),
         stop_reason=stop_reason,
         screenshot_browser=browser,
+        run_dir=run_dir,
     )
 
 
@@ -503,11 +502,10 @@ def _write_fill_report(
     message: str,
     stop_reason: str = "unknown",
     screenshot_browser: AgentBrowser | None = None,
+    run_dir: Path | None = None,
 ) -> Path:
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
-    slug = slugify(page.get("title") or "quiz")
-    run_dir = ROOT / "output" / "quiz-runs" / f"{timestamp}_{slug}_fill"
-    run_dir.mkdir(parents=True, exist_ok=True)
+    if run_dir is None:
+        run_dir = create_output_run_dir("quiz-fill", page.get("title") or "quiz")
     write_json(
         run_dir / "fill-results.json",
         {

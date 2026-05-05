@@ -4,12 +4,13 @@ import json
 import re
 import shutil
 import subprocess
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from .knowledge import load_synced_courses
-from .storage import ROOT, env_with_dotenv, read_json, slugify, utc_now, write_json
+from .math_format import display_math_text, markdown_formula
+from .output_runs import artifact_path, copy_artifacts, ensure_run_layout, write_run_manifest, write_source_bundle
+from .storage import ROOT, create_output_run_dir, env_with_dotenv, read_json, slugify, utc_now, write_json
 from .typst import compile_typst_pdf, write_study_guide_typst
 
 
@@ -46,9 +47,8 @@ def generate_study_document(
     style: str = "academic_study_guide",
     mode: str = "auto",
 ) -> Path:
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
-    run_dir = ROOT / "output" / "study-docs" / f"{timestamp}_{slugify(prompt, 'study-doc')[:80]}"
-    run_dir.mkdir(parents=True, exist_ok=True)
+    run_dir = create_output_run_dir("study-doc", prompt)
+    ensure_run_layout(run_dir)
 
     env = env_with_dotenv()
     doc_kind = _document_kind(prompt, style, mode=mode or env.get("STUDY_DOC_DEFAULT_MODE", "auto"))
@@ -90,15 +90,17 @@ def generate_study_document(
         "auto_download_attempted": auto_download_attempted,
         "request_dir": str(request_dir.relative_to(ROOT)) if request_dir and request_dir.is_relative_to(ROOT) else str(request_dir) if request_dir else None,
     }
-    write_json(run_dir / "request.json", request_payload)
+    write_json(artifact_path(run_dir, "requests", "request.json"), request_payload)
 
     if ambiguous_courses:
         _write_ambiguous_courses(run_dir, prompt, ambiguous_courses)
+        _finalize_study_doc_run(run_dir, [], status="needs-more-context")
         if request_dir:
             _write_request_link(request_dir, prompt, run_dir, "needs-more-context")
         return run_dir
 
-    write_json(run_dir / "sources.json", {"generated_at": utc_now(), "sources": excerpts})
+    write_json(artifact_path(run_dir, "metadata", "sources.json"), {"generated_at": utc_now(), "sources": excerpts})
+    write_source_bundle(run_dir, excerpts)
 
     packet = _build_packet(
         prompt=prompt,
@@ -110,9 +112,9 @@ def generate_study_document(
         output_language=output_language,
         citation_style=citation_style,
     )
-    packet_path = run_dir / "packet.json"
-    response_path = run_dir / "generator-response.json"
-    transcript_path = run_dir / "generator-transcript.json"
+    packet_path = artifact_path(run_dir, "requests", "packet.json")
+    response_path = artifact_path(run_dir, "responses", "generator-response.json")
+    transcript_path = artifact_path(run_dir, "responses", "generator-transcript.json")
     write_json(packet_path, packet)
 
     generator_result = _run_local_document_generator(
@@ -128,6 +130,7 @@ def generate_study_document(
         if generator_required:
             _write_generator_failure(run_dir, prompt, generator_result)
             _mark_request(run_dir, "failed", generator_result=generator_result)
+            _finalize_study_doc_run(run_dir, excerpts, status="failed")
             if request_dir:
                 _write_request_link(request_dir, prompt, run_dir, "failed")
             return run_dir
@@ -135,10 +138,10 @@ def generate_study_document(
 
     validation_errors = _validate_payload(payload, excerpts, doc_kind=doc_kind)
     if validation_errors:
-        write_json(run_dir / "study-guide.raw.json", payload)
+        write_json(artifact_path(run_dir, "documents", "study-guide.raw.json"), payload)
         _write_validation_failure(run_dir, prompt, validation_errors)
         write_json(
-            run_dir / "render-result.json",
+            artifact_path(run_dir, "metadata", "render-result.json"),
             {
                 "ok": False,
                 "reason": "study-document-validation-failed",
@@ -147,17 +150,18 @@ def generate_study_document(
             },
         )
         _mark_request(run_dir, "failed", validation_errors=validation_errors)
+        _finalize_study_doc_run(run_dir, excerpts, status="failed")
         if request_dir:
             _write_request_link(request_dir, prompt, run_dir, "failed")
         return run_dir
 
-    write_json(run_dir / "study-guide.json", payload)
-    _write_markdown(payload, run_dir / "study-guide.md", doc_kind=doc_kind)
+    write_json(artifact_path(run_dir, "documents", "study-guide.json"), payload)
+    _write_markdown(payload, artifact_path(run_dir, "documents", "study-guide.md"), doc_kind=doc_kind)
 
     render_result: dict[str, Any] = {"ok": True, "reason": "render-skipped", "pdf_attempted": False}
     wants_typst = output_format in {"markdown+pdf", "typst", "pdf"}
     if wants_typst:
-        typst_path = write_study_guide_typst(payload, run_dir / "study-guide.typ", doc_kind=doc_kind)
+        typst_path = write_study_guide_typst(payload, artifact_path(run_dir, "documents", "study-guide.typ"), doc_kind=doc_kind)
         render_result = {
             "ok": True,
             "reason": "typst-written",
@@ -166,10 +170,10 @@ def generate_study_document(
         }
         if output_format in {"markdown+pdf", "pdf"}:
             render_result = compile_typst_pdf(typst_path, run_dir / "study-guide.pdf")
-    write_json(run_dir / "render-result.json", render_result)
+    write_json(artifact_path(run_dir, "metadata", "render-result.json"), render_result)
 
     _mark_request(run_dir, "completed", render_result=render_result)
-    _write_stable_outputs(payload, run_dir, render_result)
+    _finalize_study_doc_run(run_dir, excerpts, status="completed")
     if request_dir:
         _write_request_link(request_dir, prompt, run_dir, "completed")
     return run_dir
@@ -417,7 +421,7 @@ def _build_packet(
             "Use sources to determine topics, formulas, examples, and priorities.",
             "Explain concepts in student-friendly language.",
             "Include formulas only when useful and explain when to use them.",
-            "Write formula fields in Typst-friendly plain math notation: use variable names like omega, lambda, phi, rho for Greek letters; use _ for subscripts, ^ for powers, ' for derivatives, / for fractions, semicolons to separate multiple equations, and do not wrap formulas in Markdown, LaTeX delimiters, or code fences.",
+            "Write formula fields as real mathematical notation whenever possible. Prefer Unicode symbols such as ω, Ω, φ, α, λ, ρ, Δ, π, √ and operators such as ≤, ≥, ·. ASCII fallbacks like omega, phi, sqrt(...), _ and ^ are allowed, but do not wrap formulas in Markdown, LaTeX delimiters, or code fences.",
             "Prefer a useful, well-structured output over citation completeness.",
             "If sources are thin, use them as topic hints and keep the document practical.",
         ]
@@ -427,6 +431,7 @@ def _build_packet(
             "Use the provided source excerpts as topic hints and priority signals.",
             "Do not include source citations in the final user-facing document.",
             "Prefer compact, well-structured, useful output over strict auditability.",
+            "Use readable mathematical notation for formulas and variables. Prefer symbols such as ω, φ, α, Δ, π, √ and operators such as ≤, ≥, · when they improve clarity.",
             "Do not browse Moodle or the web.",
             f"Write the final document in {'German' if output_language == 'de' else 'English' if output_language == 'en' else output_language}.",
         ]
@@ -1528,7 +1533,7 @@ def _write_markdown(payload: dict[str, Any], target: Path, *, doc_kind: str) -> 
             [
                 f"### {concept.get('term') or 'Concept'}",
                 "",
-                str(concept.get("explanation") or ""),
+                display_math_text(concept.get("explanation") or ""),
                 "",
             ]
         )
@@ -1536,9 +1541,9 @@ def _write_markdown(payload: dict[str, Any], target: Path, *, doc_kind: str) -> 
     for section in payload.get("sections", []):
         if not isinstance(section, dict):
             continue
-        lines.extend([f"### {section.get('heading') or 'Section'}", "", str(section.get("summary") or ""), ""])
+        lines.extend([f"### {section.get('heading') or 'Section'}", "", display_math_text(section.get("summary") or ""), ""])
         for detail in _string_list(section.get("details")):
-            lines.append(f"- {detail}")
+            lines.append(f"- {display_math_text(detail)}")
         if section.get("details"):
             lines.append("")
         examples = section.get("worked_examples") if isinstance(section.get("worked_examples"), list) else []
@@ -1549,9 +1554,9 @@ def _write_markdown(payload: dict[str, Any], target: Path, *, doc_kind: str) -> 
                     continue
                 lines.extend(
                     [
-                        f"Problem: {example.get('problem') or ''}",
+                        f"Problem: {display_math_text(example.get('problem') or '')}",
                         "",
-                        f"Solution: {example.get('solution') or ''}",
+                        f"Solution: {display_math_text(example.get('solution') or '')}",
                         "",
                     ]
                 )
@@ -1562,9 +1567,9 @@ def _write_markdown(payload: dict[str, Any], target: Path, *, doc_kind: str) -> 
             continue
         lines.extend(
             [
-                f"Question: {checkpoint.get('question') or ''}",
+                f"Question: {display_math_text(checkpoint.get('question') or '')}",
                 "",
-                f"Answer: {checkpoint.get('answer') or ''}",
+                f"Answer: {display_math_text(checkpoint.get('answer') or '')}",
                 "",
             ]
         )
@@ -1576,7 +1581,7 @@ def _write_markdown(payload: dict[str, Any], target: Path, *, doc_kind: str) -> 
             [
                 f"### {pitfall.get('pitfall') or 'Pitfall'}",
                 "",
-                str(pitfall.get("correction") or ""),
+                display_math_text(pitfall.get("correction") or ""),
                 "",
             ]
         )
@@ -1631,7 +1636,8 @@ def _write_exam_study_guide_markdown(payload: dict[str, Any], target: Path) -> N
     for item in payload.get("formula_cards", []):
         if not isinstance(item, dict):
             continue
-        lines.extend([f"### {item.get('name')}", "", f"`{item.get('formula') or ''}`", ""])
+        formula = markdown_formula(item.get("formula") or "")
+        lines.extend([f"### {item.get('name')}", "", formula or display_math_text(item.get("formula") or ""), ""])
         variables = _string_list(item.get("variables"))
         if variables:
             lines.append(f"Variablen: {', '.join(variables)}")
@@ -1698,7 +1704,7 @@ def _write_no_sources(run_dir: Path, prompt: str, selected_course: dict[str, Any
             "python3 -m uni_agent.orchestrator documents",
         ],
     }
-    write_json(run_dir / "request.json", payload)
+    write_json(artifact_path(run_dir, "requests", "request.json"), payload)
     lines = [
         "# Study Document Request",
         "",
@@ -1710,8 +1716,8 @@ def _write_no_sources(run_dir: Path, prompt: str, selected_course: dict[str, Any
         "",
         *[f"- `{suggestion}`" for suggestion in payload["suggestions"]],
     ]
-    (run_dir / "study-guide.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
-    write_json(run_dir / "render-result.json", {"ok": False, "reason": "no-source-excerpts", "pdf_attempted": False})
+    artifact_path(run_dir, "documents", "study-guide.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    write_json(artifact_path(run_dir, "metadata", "render-result.json"), {"ok": False, "reason": "no-source-excerpts", "pdf_attempted": False})
 
 
 def _write_ambiguous_courses(run_dir: Path, prompt: str, courses: list[dict[str, Any]]) -> None:
@@ -1726,9 +1732,9 @@ def _write_ambiguous_courses(run_dir: Path, prompt: str, courses: list[dict[str,
             *[f"{course.get('title')} -> {course.get('url')}" for course in courses],
         ],
     }
-    write_json(run_dir / "request.json", payload)
-    write_json(run_dir / "sources.json", {"generated_at": utc_now(), "sources": []})
-    write_json(run_dir / "render-result.json", {"ok": False, "reason": "ambiguous-course", "pdf_attempted": False})
+    write_json(artifact_path(run_dir, "requests", "request.json"), payload)
+    write_json(artifact_path(run_dir, "metadata", "sources.json"), {"generated_at": utc_now(), "sources": []})
+    write_json(artifact_path(run_dir, "metadata", "render-result.json"), {"ok": False, "reason": "ambiguous-course", "pdf_attempted": False})
     lines = [
         "# Study Document Request",
         "",
@@ -1740,7 +1746,7 @@ def _write_ambiguous_courses(run_dir: Path, prompt: str, courses: list[dict[str,
         "",
         *[f"- `{course.get('title')}` -> {course.get('url')}" for course in courses],
     ]
-    (run_dir / "study-guide.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    artifact_path(run_dir, "documents", "study-guide.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def _write_validation_failure(run_dir: Path, prompt: str, errors: list[str]) -> None:
@@ -1757,7 +1763,7 @@ def _write_validation_failure(run_dir: Path, prompt: str, errors: list[str]) -> 
         "",
         *[f"- {error}" for error in errors],
     ]
-    (run_dir / "study-guide.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    artifact_path(run_dir, "documents", "study-guide.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def _write_generator_failure(run_dir: Path, prompt: str, generator_result: dict[str, Any]) -> None:
@@ -1790,21 +1796,21 @@ def _write_generator_failure(run_dir: Path, prompt: str, generator_result: dict[
         [
             "## Next Steps",
             "",
-            "- Check `generator-transcript.json` in this run directory.",
+            "- Check `artifacts/responses/generator-transcript.json` in this run directory.",
             "- Increase `STUDY_DOC_TIMEOUT_SECONDS` if the model timed out.",
             "- Set `STUDY_DOC_GENERATOR_REQUIRED=false` to allow the deterministic source-backed fallback.",
         ]
     )
-    (run_dir / "study-guide.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
-    write_json(run_dir / "render-result.json", {"ok": False, "reason": reason, "pdf_attempted": False})
+    artifact_path(run_dir, "documents", "study-guide.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    write_json(artifact_path(run_dir, "metadata", "render-result.json"), {"ok": False, "reason": reason, "pdf_attempted": False})
 
 
 def _mark_request(run_dir: Path, status: str, **extra: Any) -> None:
-    payload = read_json(run_dir / "request.json", default={})
+    payload = read_json(artifact_path(run_dir, "requests", "request.json"), default={})
     payload["status"] = status
     payload["completed_at"] = utc_now()
     payload.update(extra)
-    write_json(run_dir / "request.json", payload)
+    write_json(artifact_path(run_dir, "requests", "request.json"), payload)
 
 
 def _write_request_link(request_dir: Path, prompt: str, run_dir: Path, status: str) -> None:
@@ -1896,17 +1902,33 @@ def _resolve_output_language(prompt: str, selected_course: dict[str, Any] | None
     return "de" if german_score >= english_score else "en"
 
 
-def _write_stable_outputs(payload: dict[str, Any], run_dir: Path, render_result: dict[str, Any]) -> None:
-    topic = str(payload.get("topic") or payload.get("title") or "study-guide")
-    safe = "DYN2-study-guide" if "dyn2" in topic.casefold() or "dynamik" in topic.casefold() else f"{slugify(topic, 'study-guide')}-study-guide"
-    markdown = run_dir / "study-guide.md"
-    if markdown.exists():
-        shutil.copyfile(markdown, ROOT / "output" / f"{safe}.md")
-    target = render_result.get("target")
-    if render_result.get("ok") and target:
-        pdf = Path(str(target))
-        if pdf.exists():
-            shutil.copyfile(pdf, ROOT / "output" / f"{safe}.pdf")
+def _finalize_study_doc_run(run_dir: Path, sources: list[dict[str, Any]], *, status: str) -> None:
+    structured_sources = write_source_bundle(run_dir, sources)
+    artifacts = copy_artifacts(
+        run_dir,
+        [
+            ("public", "study-guide.pdf"),
+            ("public", "SOURCES.md"),
+            ("documents", "study-guide.md"),
+            ("documents", "study-guide.typ"),
+            ("documents", "study-guide.json"),
+            ("documents", "study-guide.raw.json"),
+            ("requests", "request.json"),
+            ("requests", "packet.json"),
+            ("responses", "generator-response.json"),
+            ("responses", "generator-transcript.json"),
+            ("metadata", "sources.json"),
+            ("metadata", "source-manifest.json"),
+            ("metadata", "render-result.json"),
+        ],
+    )
+    write_run_manifest(
+        run_dir,
+        run_type="study-doc",
+        status=status,
+        artifacts=artifacts,
+        sources=structured_sources,
+    )
 
 
 def _topic_label(prompt: str) -> str:

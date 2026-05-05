@@ -88,7 +88,10 @@
       "required": ["name", "formula", "variables", "when_to_use", "warning", "source_ids"],
       "properties": {
         "name": { "type": "string" },
-        "formula": { "type": "string" },
+        "formula": {
+          "type": "string",
+          "description": "Use readable mathematical notation. Prefer Unicode symbols such as ω, Ω, φ, α, λ, ρ, Δ, π, √ and operators such as ≤, ≥, ·. ASCII fallbacks like omega, phi, sqrt(...), _ and ^ are accepted."
+        },
         "variables": { "type": "array", "items": { "type": "string" } },
         "when_to_use": { "type": "string" },
         "warning": { "type": ["string", "null"] },

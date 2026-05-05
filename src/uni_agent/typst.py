@@ -6,6 +6,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from .math_format import display_math_text, typst_math_content
 from .storage import ROOT
 
 
@@ -90,26 +91,34 @@ def _render_cheat_sheet(payload: dict[str, Any]) -> str:
             if isinstance(concept, dict):
                 blocks.append(_cheat_block(str(concept.get("term") or "Konzept"), [str(concept.get("explanation") or "")]))
 
+    columns = 4 if len(blocks) >= 8 else 3
+    rows = max(1, (len(blocks) + columns - 1) // columns)
+    layout_height_mm = 185 if rows <= 3 else 188
+    column_tracks = ", ".join(["1fr"] * columns)
+    row_tracks = ", ".join(["1fr"] * rows)
+
     return "\n".join(
         [
             '#set page(paper: "a4", flipped: true, margin: 5mm)',
-            '#set text(font: "Libertinus Sans", size: 6.45pt)',
-            '#set par(leading: 0.23em, spacing: 0.16em)',
-            '#let box(title, body) = block(width: 100%, inset: 2.2pt, radius: 2pt, stroke: 0.25pt + luma(205), fill: luma(250))[',
-            '  #text(weight: "bold", size: 7.2pt, fill: rgb("#17324d"))[#title]',
+            '#set text(font: "Libertinus Serif", size: 7.1pt)',
+            '#set par(leading: 0.34em, spacing: 0.18em)',
+            '#let card(title, body) = block(width: 100%, height: 100%, inset: 3.2pt, radius: 2pt, stroke: 0.25pt + luma(190), fill: luma(252), breakable: false)[',
+            '  #text(weight: "bold", size: 8pt, fill: rgb("#17324d"))[#title]',
             '  #linebreak()',
-            '  #v(0.15em)',
+            '  #v(0.18em)',
             '  #body',
             ']',
             '#align(center)[',
-            f'  #text(weight: "bold", size: 10pt)[{_content(title)}]',
+            f'  #text(weight: "bold", size: 12pt)[{_content(title)}]',
             '  #h(1em)',
-            f'  #text(size: 6.4pt, fill: rgb("#555555"))[{_content(topic)} | {_content(generated)}]',
+            f'  #text(size: 7pt, fill: rgb("#555555"))[{_content(topic)} | {_content(generated)}]',
             ']',
-            '#v(-0.2em)',
-            '#grid(columns: (1fr, 1fr, 1fr, 1fr), gutter: 3.5mm, row-gutter: 2.2pt,',
+            '#v(1.5mm)',
+            f'#block(height: {layout_height_mm}mm)[',
+            f'#grid(columns: ({column_tracks}), rows: ({row_tracks}), gutter: 3.2mm, row-gutter: 3.2mm,',
             ",\n".join(blocks),
             ')',
+            ']',
             '',
         ]
     )
@@ -119,8 +128,50 @@ def _cheat_block(title: str, entries: list[str]) -> str:
     cleaned = [entry.strip() for entry in entries if entry and entry.strip()]
     if not cleaned:
         cleaned = ["Wichtigste Definitionen, Formeln und Einsatzbedingungen prüfen."]
-    body = "\n".join(f"- {_content(entry)}" for entry in cleaned)
-    return f"box([{_content(title)}], [\n{body}\n])"
+    body = "\n".join(_cheat_entry(entry) for entry in cleaned)
+    return f"card([{_content(title)}], [\n{body}\n])"
+
+
+def _cheat_entry(entry: str) -> str:
+    segments = [segment.strip() for segment in re.split(r"\s*;\s*", entry) if segment.strip()]
+    if not segments:
+        return f"- {_content(display_math_text(entry))}"
+    rendered = [_cheat_segment(segment) for segment in segments]
+    return "- " + "; ".join(rendered)
+
+
+def _cheat_segment(segment: str) -> str:
+    if ":" in segment:
+        label, value = [part.strip() for part in segment.split(":", 1)]
+        return f"#text(weight: \"bold\")[{_content(label)}:] {_mixed_math_text(value)}"
+    if _looks_like_formula(segment):
+        return _mixed_math_text(segment)
+    return _content(display_math_text(segment))
+
+
+def _mixed_math_text(value: str) -> str:
+    parts = [part.strip() for part in re.split(r",\s*", value) if part.strip()]
+    if not parts:
+        return _content(display_math_text(value))
+    return ", ".join(_math_or_text_part(part) for part in parts)
+
+
+def _math_or_text_part(part: str) -> str:
+    if not _looks_like_formula(part):
+        return _content(display_math_text(part))
+    named = re.match(r"^([A-Za-zÄÖÜäöüß][A-Za-zÄÖÜäöüß ]+?)\s+([A-Za-z][A-Za-z0-9_]*\s*=.+)$", part)
+    if named and named.group(1).strip().casefold() not in {"sum", "summe", "integral"}:
+        return f"{_content(display_math_text(named.group(1).strip()))} ${typst_math_content(named.group(2).strip())}$"
+    return f"${typst_math_content(part)}$"
+
+
+def _looks_like_formula(value: str) -> bool:
+    return bool(
+        re.search(
+            r"(=|<=|>=|sqrt\s*\(|\^|_[A-Za-z0-9]+|\b(?:omega|Omega|alpha|beta|gamma|delta|lambda|mu|phi|rho|theta|pi)\b|[A-Za-z][0-9])",
+            value,
+        )
+    )
 
 
 def _render_document(payload: dict[str, Any]) -> str:
@@ -421,44 +472,12 @@ def _formula_block(value: Any) -> str:
     formulas = _split_formulas(str(value or ""))
     if not formulas:
         return _paragraph("Not sufficiently sourced. Do not use as final answer.")
-    rendered = "\n".join(f"  ${_math_content(formula)}$" for formula in formulas)
+    rendered = "\n".join(f"  ${typst_math_content(formula)}$" for formula in formulas)
     return f"#formula-box[\n{rendered}\n]"
 
 
 def _split_formulas(value: str) -> list[str]:
     return [part.strip() for part in re.split(r"\s*;\s*", value.strip()) if part.strip()]
-
-
-def _math_content(value: str) -> str:
-    text = value.strip()
-    replacements = {
-        "lambda": "lambda",
-        "Lambda": "Lambda",
-        "omega": "omega",
-        "Omega": "Omega",
-        "phi": "phi",
-        "Phi": "Phi",
-        "rho": "rho",
-        "Summe": "sum",
-        "summe": "sum",
-    }
-    for source, target in replacements.items():
-        text = re.sub(rf"\b{re.escape(source)}\b", target, text)
-    text = re.sub(r"\bd([A-Za-z])\b", r"d \1", text)
-    text = re.sub(r"\bd([A-Z])", r"d \1", text)
-    text = re.sub(r"\b(omega|[A-Za-z]_[A-Za-z0-9]+)\s+x\s+(?=([A-Za-z]_[A-Za-z0-9]+|\())", r"\1 times ", text)
-    text = re.sub(r"_([A-Za-z0-9]+)", _math_subscript, text)
-    text = text.replace("'", "'")
-    return text.replace("$", r"\$")
-
-
-def _math_subscript(match: re.Match[str]) -> str:
-    value = match.group(1)
-    if value in {"alpha", "beta", "gamma", "delta", "epsilon", "lambda", "mu", "nu", "omega", "Omega", "phi", "Phi", "rho", "theta"}:
-        return f"_({value})"
-    if len(value) > 1 and not value.isdigit():
-        return f'_(\"{value}\")'
-    return f"_({value})"
 
 
 def _typst_list(items: list[str]) -> str:

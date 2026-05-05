@@ -44,14 +44,14 @@ scripts/moodle_download_materials.sh --course-limit 3 --download-limit 5
 scripts/study_buddy.sh "find the next math quiz"
 scripts/study_buddy.sh "do the next math quiz"
 scripts/study_buddy.sh "do the next math quiz" --auto-answer
-scripts/study_buddy.sh "do the next math quiz" --answers output/answers.json
+scripts/study_buddy.sh "do the next math quiz" --answers answers.json
 scripts/study_buddy.sh "generate a study guide for Integralrechnung 2"
 scripts/study_doc.sh "DYN2" --mode exam-study-guide
 scripts/study_doc.sh "summarize MAES2 definite integrals as a PDF" --mode summary
 scripts/study_doc.sh "make a formula sheet for DYN2" --mode cheat-sheet
 scripts/quiz_assist.sh <quiz-url>
 scripts/quiz_assist.sh <quiz-url> --fill-safe --auto-answer
-scripts/quiz_assist.sh <quiz-url> --fill-safe --answers output/example-answers.json
+scripts/quiz_assist.sh <quiz-url> --fill-safe --answers answers.json
 ```
 
 ## Prompt Runner
@@ -64,11 +64,11 @@ known quiz/activity URL. If no sync exists, it falls back to the older course
 indexing path and can trigger a fast metadata-only sync when no course index is
 available.
 
-`--auto-answer` now creates one isolated packet per visible question under `output/subagent-runs/`. Each packet contains extracted question text, visible controls/options, Moodle page metadata, local source excerpts, and a page screenshot. By default the runner calls `codex exec` as a read-only subagent when available. Set `SUBAGENT_SOLVER_COMMAND` to a custom command, or set it to `off` to only generate packets and leave questions unfilled.
+`--auto-answer` creates one isolated packet per visible question inside the current quiz run folder. Each packet contains extracted question text, visible controls/options, Moodle page metadata, local source excerpts, and a page screenshot. By default the runner calls `codex exec` as a read-only subagent when available. Set `SUBAGENT_SOLVER_COMMAND` to a custom command, or set it to `off` to only generate packets and leave questions unfilled.
 
 Quiz filling defaults to a `--max-pages` cap of 100, so it attempts the whole quiz until Moodle has no safe next-page navigation left. Lower this value only for testing.
 
-If the prompt is ambiguous, it writes a clarification request under `output/requests/` with the likely course/quiz choices and exact next commands.
+If the prompt is ambiguous, it writes one clarification folder directly under `output/` with the likely course/quiz choices and exact next commands.
 
 ## Moodle Sync
 
@@ -94,7 +94,7 @@ Other tools consume the sync output as their compact course map:
 Outputs are written under:
 
 ```text
-output/sync-runs/<timestamp>_moodle-sync/
+output/<timestamp>_moodle-sync/
 state/moodle_sync_summary.json
 state/course_agent_cards.json
 state/course_index.json
@@ -138,7 +138,7 @@ file paths.
 Outputs are written under:
 
 ```text
-output/study-docs/<timestamp>_<slug>/
+output/<timestamp>_study-doc_<slug>/
 ```
 
 Expected files include:
@@ -151,6 +151,10 @@ study-guide.md
 study-guide.typ
 render-result.json
 study-guide.pdf          # only when Typst compilation succeeds
+run-manifest.json
+source-manifest.json     # structured source list with pages
+SOURCES.md               # human-readable source list
+source-files/            # only created when referenced local files are copied
 ```
 
 Direct command:

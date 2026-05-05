@@ -40,17 +40,29 @@ def require_env(keys: list[str]) -> dict[str, str]:
 def ensure_dirs() -> None:
     for path in [
         ROOT / "output",
-        ROOT / "output" / "course-summaries",
-        ROOT / "output" / "quiz-runs",
-        ROOT / "output" / "subagent-runs",
-        ROOT / "output" / "study-docs",
-        ROOT / "output" / "notes",
         ROOT / "state",
         ROOT / "state" / "browser",
         ROOT / "data" / "moodle" / "courses",
         ROOT / "data" / "moodle" / "materials",
     ]:
         path.mkdir(parents=True, exist_ok=True)
+
+
+def create_output_run_dir(kind: str, label: str | None = None) -> Path:
+    """Create one self-contained run folder directly below output/."""
+    ensure_dirs()
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+    parts = [timestamp, slugify(kind, "run")]
+    if label:
+        parts.append(slugify(label, "output")[:80])
+    base_name = "_".join(parts)
+    run_dir = ROOT / "output" / base_name
+    suffix = 2
+    while run_dir.exists():
+        run_dir = ROOT / "output" / f"{base_name}_{suffix:02d}"
+        suffix += 1
+    run_dir.mkdir(parents=True)
+    return run_dir
 
 
 def utc_now() -> str:

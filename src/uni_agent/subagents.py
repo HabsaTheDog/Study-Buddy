@@ -4,13 +4,12 @@ import json
 import re
 import shutil
 import subprocess
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from .browser import AgentBrowser
 from .knowledge import course_brief_for_url, course_briefs_for_prompt
-from .storage import ROOT, env_with_dotenv, read_json, slugify, utc_now, write_json
+from .storage import ROOT, create_output_run_dir, env_with_dotenv, read_json, utc_now, write_json
 
 
 ANSWER_SCHEMA_PATH = ROOT / "config" / "subagent_answer.schema.json"
@@ -34,8 +33,7 @@ def generate_answer_specs(
     """
 
     if packet_root is None:
-        timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
-        packet_root = ROOT / "output" / "subagent-runs" / f"{timestamp}_{slugify(page.get('title') or 'quiz')}"
+        packet_root = create_output_run_dir("subagent", page.get("title") or "quiz")
     page_dir = packet_root / f"page-{page_number or 1:03d}"
     page_dir.mkdir(parents=True, exist_ok=True)
 

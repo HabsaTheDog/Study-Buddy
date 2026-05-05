@@ -12,6 +12,3 @@ state/*
 data/moodle/
 
 output/*
-!output/README.md
-!output/example-answers.json
-!output/example-multiple-choice-answers.json

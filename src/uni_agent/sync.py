@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections import Counter
-from datetime import datetime
 from pathlib import Path
 import shutil
 from typing import Any
@@ -9,7 +8,7 @@ from typing import Any
 from .courses import index_courses
 from .documents import discover_material_links, download_course_materials, refresh_document_index
 from .moodle import login
-from .storage import ROOT, ensure_dirs, read_json, slugify, utc_now, write_json
+from .storage import ROOT, create_output_run_dir, ensure_dirs, read_json, slugify, utc_now, write_json
 from .types import to_jsonable
 
 
@@ -28,9 +27,8 @@ def sync_moodle(
     """
 
     ensure_dirs()
-    run_dir = ROOT / "output" / "sync-runs" / f"{datetime.now().strftime('%Y-%m-%d_%H%M%S')}_moodle-sync"
+    run_dir = create_output_run_dir("moodle-sync")
     cards_dir = run_dir / "course-cards"
-    cards_dir.mkdir(parents=True, exist_ok=True)
 
     if clean:
         _reset_sync_state(download=download)
@@ -185,6 +183,7 @@ def _agent_brief(course_title: str, links: list[dict[str, Any]], hint_counts: Co
 
 
 def _write_course_card_markdown(path: Path, card: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     lines = [
         f"# {card['course_title']}",
         "",

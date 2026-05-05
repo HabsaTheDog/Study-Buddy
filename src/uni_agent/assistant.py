@@ -11,8 +11,9 @@ from .browser import AgentBrowser
 from .courses import index_courses
 from .documents import MATERIAL_LINKS_JS
 from .knowledge import load_synced_courses
+from .output_runs import artifact_path
 from .quiz import assist_quiz, fill_quiz
-from .storage import ROOT, read_json, slugify, utc_now, write_json
+from .storage import ROOT, create_output_run_dir, read_json, utc_now, write_json
 from .study_docs import generate_study_document
 
 
@@ -58,22 +59,20 @@ def run_prompt(
     prompt_lower = prompt_clean.casefold()
     if _looks_like_do_request(prompt_lower) and answers_path is None:
         auto_answer = True
-    request_dir = _new_request_dir(prompt_clean)
 
     if _looks_like_study_doc_request(prompt_lower):
-        return _handle_study_doc_prompt(prompt_clean, request_dir=request_dir)
+        return _handle_study_doc_prompt(prompt_clean)
 
     if _looks_like_quiz_request(prompt_lower):
         return _handle_quiz_prompt(
             prompt_clean,
             answers_path=answers_path,
             max_pages=max_pages,
-            request_dir=request_dir,
             auto_answer=auto_answer,
         )
 
     return _write_clarification(
-        request_dir,
+        _new_request_dir(prompt_clean),
         prompt_clean,
         "I could not map this prompt to a supported Moodle action yet.",
         suggestions=[
@@ -135,14 +134,13 @@ def _looks_like_do_request(prompt_lower: str) -> bool:
     )
 
 
-def _handle_study_doc_prompt(prompt: str, *, request_dir: Path) -> PromptResult:
+def _handle_study_doc_prompt(prompt: str) -> PromptResult:
     run_dir = generate_study_document(
         prompt,
-        request_dir=request_dir,
         output_format="markdown+pdf",
         style="academic_study_guide",
     )
-    payload = read_json(run_dir / "request.json", default={})
+    payload = read_json(artifact_path(run_dir, "requests", "request.json"), default={})
     status = payload.get("status") or "completed"
     return PromptResult(
         "study-document" if status == "completed" else str(status),
@@ -156,7 +154,6 @@ def _handle_quiz_prompt(
     *,
     answers_path: Path | None,
     max_pages: int,
-    request_dir: Path,
     auto_answer: bool,
 ) -> PromptResult:
     url = _extract_url(prompt)
@@ -172,26 +169,20 @@ def _handle_quiz_prompt(
             no_activity = _fill_had_no_activity(run_dir)
             if no_activity:
                 return _write_clarification(
-                    request_dir,
+                    run_dir,
                     prompt,
                     "I opened the quiz target, but Moodle did not expose an attempt button or visible questions.",
                     suggestions=[
                         "The quiz may be closed, already completed, hidden, or not currently attemptable.",
                         "Paste a different quiz URL, or mention a more specific quiz name.",
                     ],
-                    extra={"target_url": url, "downstream_output": str(run_dir.relative_to(ROOT))},
+                    extra={"target_url": url},
                 )
-            return _write_execution_summary(
-                request_dir,
-                prompt,
-                action="auto-answered-quiz-from-explicit-url" if auto_answer else "filled-quiz-from-explicit-url",
-                target_url=url,
-                downstream_output=run_dir,
-            )
+            return PromptResult("completed", "Completed quiz run", run_dir)
         run_dir = assist_quiz(url)
-        template = _write_answer_template_from_review(run_dir, request_dir)
+        template = _write_answer_template_from_review(run_dir, run_dir)
         return _write_clarification(
-            request_dir,
+            run_dir,
             prompt,
             "I found a quiz URL and inspected it, but no answer file was provided.",
             suggestions=[
@@ -205,7 +196,7 @@ def _handle_quiz_prompt(
     course_candidates = _rank_courses(prompt, courses)
     if not course_candidates:
         return _write_clarification(
-            request_dir,
+            _new_request_dir(prompt),
             prompt,
             "I could not identify a likely Moodle course from the prompt.",
             suggestions=["Mention the course name/code, for example `Mathematik`, `MAES2`, or paste the quiz URL."],
@@ -214,13 +205,13 @@ def _handle_quiz_prompt(
     top_score = course_candidates[0]["score"]
     likely_courses = [course for course in course_candidates if course["score"] == top_score][:5]
     if len(likely_courses) > 1 and top_score < 6:
-        return _write_course_clarification(request_dir, prompt, likely_courses)
+        return _write_course_clarification(_new_request_dir(prompt), prompt, likely_courses)
 
     selected_course = likely_courses[0]
     quizzes = _discover_quizzes_for_course(selected_course)
     if not quizzes:
         return _write_clarification(
-            request_dir,
+            _new_request_dir(prompt),
             prompt,
             f"I selected `{selected_course['title']}`, but found no quiz links on the course page.",
             suggestions=[
@@ -232,7 +223,7 @@ def _handle_quiz_prompt(
 
     target_quiz = _select_actionable_quiz(prompt, quizzes) if auto_answer else _select_quiz(prompt, quizzes)
     if not target_quiz:
-        return _write_quiz_clarification(request_dir, prompt, selected_course, quizzes)
+        return _write_quiz_clarification(_new_request_dir(prompt), prompt, selected_course, quizzes)
 
     if answers_path or auto_answer:
         run_dir = fill_quiz(
@@ -245,7 +236,7 @@ def _handle_quiz_prompt(
         no_activity = _fill_had_no_activity(run_dir)
         if no_activity:
             return _write_clarification(
-                request_dir,
+                run_dir,
                 prompt,
                 "I found the likely quiz, but Moodle did not expose an attempt button or visible questions.",
                 suggestions=[
@@ -257,22 +248,14 @@ def _handle_quiz_prompt(
                 extra={
                     "selected_course": selected_course,
                     "selected_quiz": target_quiz,
-                    "downstream_output": str(run_dir.relative_to(ROOT)),
                 },
             )
-        return _write_execution_summary(
-            request_dir,
-            prompt,
-            action="auto-answered-selected-quiz" if auto_answer else "filled-selected-quiz",
-            target_url=target_quiz["url"],
-            downstream_output=run_dir,
-            extra={"selected_course": selected_course, "selected_quiz": target_quiz},
-        )
+        return PromptResult("completed", "Completed quiz run", run_dir)
 
     run_dir = assist_quiz(target_quiz["url"])
-    template = _write_answer_template_from_review(run_dir, request_dir)
+    template = _write_answer_template_from_review(run_dir, run_dir)
     return _write_clarification(
-        request_dir,
+        run_dir,
         prompt,
         "I found and inspected the likely quiz, but no answer file was provided.",
         suggestions=[
@@ -511,10 +494,7 @@ def _extract_url(prompt: str) -> str | None:
 
 
 def _new_request_dir(prompt: str) -> Path:
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
-    request_dir = ROOT / "output" / "requests" / f"{timestamp}_{slugify(prompt, 'request')[:80]}"
-    request_dir.mkdir(parents=True, exist_ok=True)
-    return request_dir
+    return create_output_run_dir("request", prompt)
 
 
 def _write_clarification(
@@ -582,42 +562,6 @@ def _write_quiz_clarification(
         suggestions=["Specify the quiz name, or paste the quiz URL.", *suggestions],
         extra={"selected_course": course, "quiz_candidates": quizzes},
     )
-
-
-def _write_execution_summary(
-    request_dir: Path,
-    prompt: str,
-    *,
-    action: str,
-    target_url: str,
-    downstream_output: Path,
-    extra: dict[str, Any] | None = None,
-) -> PromptResult:
-    payload = {
-        "created_at": utc_now(),
-        "prompt": prompt,
-        "status": "completed",
-        "action": action,
-        "target_url": target_url,
-        "downstream_output": str(downstream_output.relative_to(ROOT)),
-        **(extra or {}),
-    }
-    write_json(request_dir / "request.json", payload)
-    lines = [
-        "# Study Buddy Request",
-        "",
-        f"Prompt: {prompt}",
-        "",
-        "Status: completed",
-        "",
-        f"Action: {action}",
-        f"Target: {target_url}",
-        f"Output: `{downstream_output.relative_to(ROOT)}`",
-        "",
-        "Final submit was not clicked.",
-    ]
-    (request_dir / "summary.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
-    return PromptResult("completed", f"Completed {action}", request_dir)
 
 
 def main() -> None:

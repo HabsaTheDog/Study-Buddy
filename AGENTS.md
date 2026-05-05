@@ -30,7 +30,7 @@ This sync logs in, indexes visible Moodle courses, opens each course page, downl
 
 Use this baseline before ad hoc browsing:
 
-- For course/task routing, first inspect `state/course_agent_cards.json` or the generated course cards under `output/sync-runs/.../course-cards/`.
+- For course/task routing, first inspect `state/course_agent_cards.json` or the generated course cards under `output/<timestamp>_moodle-sync/course-cards/`.
 - For current availability, quiz attempt state, deadlines, and visible Moodle page content, still open Moodle live with `agent-browser`; the sync is orientation, not final truth for live state.
 - For heavy source content such as PDFs/slides, prefer the local cache under `data/moodle/materials/` and `state/document_index.json`.
 - If a task cannot be mapped because the indexes are missing or stale, run `scripts/moodle_sync.sh` before asking the user for clarification. Some high-level tools may automatically run a metadata-only sync when no course index exists.
@@ -63,8 +63,10 @@ Do not answer from memory while a local tool can inspect Moodle state, course fi
 - When continuing after a tool run, read the printed `Output:` path before deciding the next step.
 - If a tool creates a request directory with `clarification.md`, inspect it and either follow its suggested next command or use the closest specialized script.
 - Keep generated artifacts in `output/` and reference their exact path in the final response.
+- For main tool runs, prefer one self-contained run directory directly under `output/`. Final user-facing files should live at the run root. Source metadata should use `source-manifest.json` and `SOURCES.md`; create `source-files/` only when local source files are actually copied.
 - If a previous assistant produced the wrong artifact, correct course by using the routing rules above; do not defend or repeat the earlier path.
 - When the request is in German, produce the user-facing artifact in German unless the source material or user explicitly asks otherwise.
+- For math-heavy study documents, use readable mathematical notation instead of ASCII code-style formulas; prefer symbols such as `ω`, `φ`, `α`, `Δ`, `π`, `√`, `≤`, `≥`, and `·` where appropriate.
 
 ## Non-Negotiable Safety Rules
 
@@ -203,8 +205,7 @@ At the end:
 
 - Stop before final submission, usually on the review/summary page or on the last safe page.
 - Do not click final submit.
-- Write `fill-results.json`, `fill-report.md`, and screenshots into `output/quiz-runs/<timestamp>_<slug>_fill/`.
-- Write subagent packets, screenshots, transcripts, and answer specs into `output/subagent-runs/<timestamp>_<slug>/`.
+- Write `fill-results.json`, `fill-report.md`, screenshots, and any subagent packets into one run folder directly under `output/`, for example `output/<timestamp>_quiz-fill_<slug>/`.
 
 Subagent answer generation:
 
