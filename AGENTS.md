@@ -61,7 +61,7 @@ Do not answer from memory while a local tool can inspect Moodle state, course fi
 - At the start of each turn, restate the active task internally as: user goal, target course/topic if any, expected artifact, and safety constraints.
 - Prefer the latest user message over older thread context. Older context is supporting evidence only.
 - When continuing after a tool run, read the printed `Output:` path before deciding the next step.
-- If a tool creates a request directory with `clarification.md`, inspect it and either follow its suggested next command or use the closest specialized script.
+- If a tool creates a request directory with `clarification.md`, inspect it before doing anything else. If the clarification concerns opening Moodle quiz/test pages, stop and ask the user for explicit permission; do not infer permission from the original prompt and do not continue with `--quiz-access authorized` until the user replies.
 - Keep generated artifacts in `output/` and reference their exact path in the final response.
 - For main tool runs, prefer one self-contained run directory directly under `output/`. Final user-facing files should live at the run root. Build inputs, model responses, metadata, and copied source files should live under sorted `artifacts/` subfolders.
 - If a previous assistant produced the wrong artifact, correct course by using the routing rules above; do not defend or repeat the earlier path.
@@ -74,10 +74,26 @@ Do not answer from memory while a local tool can inspect Moodle state, course fi
 - Never click controls whose visible text, ARIA name, title, selector, or surrounding context means final submission.
 - Never accept final confirmation dialogs for Moodle quiz attempts.
 - Never bypass access controls, timers, proctoring, browser restrictions, or institutional controls.
+- Never treat a request for "quiz questions", "examples from Moodle quizzes", "quiz-style questions", "from the tests", or similar wording as permission to open quiz/test pages. That wording describes the desired artifact, not browser authorization.
 - The tool may fill supported quiz answers during an active attempt, but it must always stop before final submission.
 - If Moodle shows only final-submit/review/summary controls, stop and report.
 - If a question cannot be answered with sufficient confidence, leave that question unfilled and report why.
 - The user performs any final Moodle submission manually.
+
+## Quiz Opening Permission Protocol
+
+This protocol applies to study documents, Lernzettel, exam guides, formula sheets, and any other artifact request that would benefit from Moodle quiz/test pages.
+
+1. Run the appropriate local tool with the default quiz policy first, for example `scripts/study_build.sh "<prompt>" --format markdown+pdf`.
+2. If the tool writes `clarification.md` asking whether quiz pages may be opened, read it and then ask the user directly. The question must specify the exact scope needed, such as:
+   - which course or quiz URLs may be opened
+   - whether only quiz overview pages are allowed
+   - whether completed review/question pages are allowed
+   - whether active/in-progress attempts may be opened
+3. Do not pass `--quiz-access authorized` until the user gives an explicit, situation-specific reply after the clarification. The user's earlier artifact request is not enough.
+4. Permission to open quiz overview pages does not imply permission to click `Test versuchen`, `Versuch starten`, `Versuch fortsetzen`, review unavailable tests, final-submit controls, or confirmation dialogs.
+5. If Moodle says review is unavailable, the quiz is closed, or questions are only visible by starting/continuing an attempt, stop and report that limitation. Build the artifact from PDFs, lecture notes, assignments, and safe Moodle pages unless the user then gives explicit permission for the narrower next action and that action is allowed by the safety rules.
+6. In the final answer, state whether quiz pages were opened, whether any questions were extracted, and which quiz access limitations were encountered.
 
 ## Credential Handling
 
@@ -131,7 +147,7 @@ Use these defaults in fresh contexts:
 - Before manual course selection, use the synced course cards in `state/course_agent_cards.json` as the compact map of known Moodle courses and activity/resource links.
 - For study documents and learning artifacts, prefer `scripts/study_build.sh` after the first runner attempt or directly when the prompt is clearly a document request.
 - For "Formelsammlung", "formula sheet", "cheat sheet", or "Spickzettel", run `scripts/study_build.sh "<prompt>" --format markdown+pdf`.
-- If a document request asks for Moodle-like quiz questions, `study-build` must ask for explicit quiz-opening permission before opening any quiz/test page. Do not use old quiz outputs as a substitute for permission.
+- If a document request asks for Moodle-like quiz questions, `study-build` must ask for explicit quiz-opening permission before opening any quiz/test page. Do not use old quiz outputs as a substitute for permission. Do not set `--quiz-access authorized` unless the user has replied to the current clarification with explicit scope.
 - For "do/fill/solve/bearbeite" quiz prompts, the prompt runner auto-enables answer generation.
 - For direct quiz URLs, use `scripts/quiz_assist.sh "<quiz-url>" --fill-safe --auto-answer`.
 - Do not add `--max-pages 1` unless the user explicitly asks for a one-page test.
