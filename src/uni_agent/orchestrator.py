@@ -4,10 +4,13 @@ import argparse
 
 from .courses import index_courses
 from .documents import download_materials, refresh_document_index
+from .activities import resolve_requested_activities
+from .browser import AgentBrowser
+from .knowledge import load_synced_courses
 from .moodle import login, snapshot
-from .quiz import assist_quiz, fill_quiz
-from .storage import ROOT, ensure_dirs
-from .study_docs import generate_study_document
+from .quiz import assist_quiz, fill_quiz, verify_quiz
+from .storage import ROOT, create_output_run_dir, ensure_dirs, read_json, write_json
+from .study_build import generate_study_build
 from .sync import sync_moodle
 
 
@@ -40,23 +43,32 @@ def main() -> None:
     )
     sync_parser.add_argument("--max-bytes-per-file", type=int, default=100_000_000)
 
-    study_doc_parser = subparsers.add_parser("study-doc")
-    study_doc_parser.add_argument("prompt", nargs="+")
-    study_doc_parser.add_argument(
+    study_build_parser = subparsers.add_parser("study-build")
+    study_build_parser.add_argument("prompt", nargs="+")
+    study_build_parser.add_argument(
         "--format",
         default="markdown+pdf",
         choices=["markdown+pdf", "markdown", "typst", "pdf"],
     )
-    study_doc_parser.add_argument("--style", default="academic-study-guide")
-    study_doc_parser.add_argument(
-        "--mode",
-        default="auto",
-        choices=["auto", "exam-study-guide", "summary", "cheat-sheet", "assignment-brief", "generic"],
+    study_build_parser.add_argument(
+        "--quiz-access",
+        default="ask",
+        choices=["ask", "none", "authorized"],
+        help="Quiz access policy for document generation. Default asks before opening any quiz.",
     )
+    study_build_parser.add_argument("--max-repair-cycles", type=int, default=3)
+    study_build_parser.add_argument("--live-moodle-read", action="store_true")
+
+    activity_parser = subparsers.add_parser("activity-resolve")
+    activity_parser.add_argument("prompt", nargs="+")
 
     quiz_parser = subparsers.add_parser("quiz")
     quiz_parser.add_argument("url")
     quiz_parser.add_argument("--fill-safe", action="store_true")
+    quiz_parser.add_argument("--verify-only", action="store_true")
+    quiz_parser.add_argument("--verify-persisted", action="store_true")
+    quiz_parser.add_argument("--resume-attempt", action="store_true")
+    quiz_parser.add_argument("--summary-only", action="store_true")
     quiz_parser.add_argument("--answers")
     quiz_parser.add_argument("--auto-answer", action="store_true")
     quiz_parser.add_argument(
@@ -67,14 +79,9 @@ def main() -> None:
     )
     quiz_parser.add_argument("--no-start", action="store_true")
     quiz_parser.add_argument(
-        "--force-fill",
-        action="store_true",
-        help="Deprecated compatibility flag. Fill mode already bypasses review-only classification.",
-    )
-    quiz_parser.add_argument(
         "--respect-review-only",
         action="store_true",
-        help="Use the review-only classifier in fill mode instead of the default force-fill behavior.",
+        help="Use the review-only classifier in fill mode instead of the default fill behavior.",
     )
 
     args = parser.parse_args()
@@ -106,16 +113,30 @@ def main() -> None:
             clean=not args.incremental,
         )
         print(f"Wrote Moodle sync report to {run_dir}")
-    elif args.command == "study-doc":
-        run_dir = generate_study_document(
+    elif args.command == "study-build":
+        run_dir = generate_study_build(
             " ".join(args.prompt),
             output_format=args.format,
-            style=args.style,
-            mode=args.mode,
+            quiz_access=args.quiz_access,
+            max_repair_cycles=args.max_repair_cycles,
+            live_moodle_read=args.live_moodle_read,
         )
-        print(f"Wrote study document to {run_dir}")
+        print(f"Wrote study build to {run_dir}")
+    elif args.command == "activity-resolve":
+        prompt = " ".join(args.prompt)
+        courses = load_synced_courses(refresh_if_missing=True)
+        course = next((item for item in courses if "dynamik" in str(item.get("title", "")).casefold() and "phdyn" in str(item.get("title", "")).casefold()), courses[0] if courses else None)
+        if not course:
+            raise SystemExit("No courses available to resolve activities.")
+        result = resolve_requested_activities(prompt, course, browser=AgentBrowser(mode="read"))
+        run_dir = create_output_run_dir("activity-resolve", prompt)
+        write_json(run_dir / "activity-resolution.json", result)
+        print(f"Wrote activity resolution to {run_dir}")
     elif args.command == "quiz":
-        if args.fill_safe:
+        if args.verify_only or args.summary_only:
+            run_dir = verify_quiz(args.url)
+            print(f"Wrote quiz verification to {run_dir}")
+        elif args.fill_safe:
             if not args.answers and not args.auto_answer:
                 raise SystemExit("--fill-safe requires --answers <path> or --auto-answer")
             run_dir = fill_quiz(
@@ -123,9 +144,14 @@ def main() -> None:
                 answers_path=ROOT / args.answers if args.answers else None,
                 max_pages=args.max_pages,
                 start_attempt=not args.no_start,
-                force_fill=not args.respect_review_only,
+                bypass_review_only=not args.respect_review_only,
                 auto_answer=args.auto_answer,
             )
+            if args.verify_persisted:
+                fill_payload = read_json(run_dir / "fill-results.json", default={})
+                verification_url = str(fill_payload.get("url") or args.url)
+                verify_dir = verify_quiz(verification_url)
+                write_json(run_dir / "post-fill-verification.json", {"verification_run": str(verify_dir)})
             print(f"Wrote quiz fill report to {run_dir}")
         else:
             run_dir = assist_quiz(args.url)

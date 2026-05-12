@@ -19,6 +19,7 @@ def sync_moodle(
     download_limit_per_course: int = 0,
     max_bytes_per_file: int = 100_000_000,
     clean: bool = True,
+    write_output: bool = True,
 ) -> Path:
     """Refresh Moodle course metadata and write compact agent course cards.
 
@@ -27,8 +28,8 @@ def sync_moodle(
     """
 
     ensure_dirs()
-    run_dir = create_output_run_dir("moodle-sync")
-    cards_dir = run_dir / "course-cards"
+    run_dir = create_output_run_dir("moodle-sync") if write_output else None
+    cards_dir = run_dir / "course-cards" if run_dir else None
 
     if clean:
         _reset_sync_state(download=download)
@@ -51,8 +52,9 @@ def sync_moodle(
 
     document_index_path = refresh_document_index()
     cards = _build_course_cards(courses, material_courses)
-    for card in cards:
-        _write_course_card_markdown(cards_dir / f"{slugify(card['course_title'], 'course')}.md", card)
+    if cards_dir:
+        for card in cards:
+            _write_course_card_markdown(cards_dir / f"{slugify(card['course_title'], 'course')}.md", card)
 
     summary = {
         "synced_at": utc_now(),
@@ -67,11 +69,12 @@ def sync_moodle(
         "document_index": str(document_index_path.relative_to(ROOT)),
         "course_cards": cards,
     }
-    write_json(run_dir / "sync-summary.json", summary)
+    if run_dir:
+        write_json(run_dir / "sync-summary.json", summary)
+        _write_sync_report(run_dir / "sync-report.md", summary)
     write_json(ROOT / "state" / "moodle_sync_summary.json", summary)
     write_json(ROOT / "state" / "course_agent_cards.json", {"generated_at": utc_now(), "courses": cards})
-    _write_sync_report(run_dir / "sync-report.md", summary)
-    return run_dir
+    return run_dir or ROOT / "state" / "moodle_sync_summary.json"
 
 
 def _reset_sync_state(*, download: bool) -> None:

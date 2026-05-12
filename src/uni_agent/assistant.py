@@ -7,14 +7,16 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from .activities import discover_live_activities, parse_requested_activity, resolve_requested_activities
 from .browser import AgentBrowser
 from .courses import index_courses
 from .documents import MATERIAL_LINKS_JS
 from .knowledge import load_synced_courses
 from .output_runs import artifact_path
+from .preflight import run_moodle_preflight, validate_quiz_activity_url
 from .quiz import assist_quiz, fill_quiz
 from .storage import ROOT, create_output_run_dir, read_json, utc_now, write_json
-from .study_docs import generate_study_document
+from .study_build import generate_study_build
 
 
 COURSE_HINTS = {
@@ -60,8 +62,8 @@ def run_prompt(
     if _looks_like_do_request(prompt_lower) and answers_path is None:
         auto_answer = True
 
-    if _looks_like_study_doc_request(prompt_lower):
-        return _handle_study_doc_prompt(prompt_clean)
+    if _looks_like_study_build_request(prompt_lower):
+        return _handle_study_build_prompt(prompt_clean)
 
     if _looks_like_quiz_request(prompt_lower):
         return _handle_quiz_prompt(
@@ -84,12 +86,12 @@ def run_prompt(
 
 
 def _looks_like_quiz_request(prompt_lower: str) -> bool:
-    if _looks_like_study_doc_request(prompt_lower) and not _looks_like_do_request(prompt_lower):
+    if _looks_like_study_build_request(prompt_lower) and not _looks_like_do_request(prompt_lower):
         return False
     return any(term in prompt_lower for term in ["quiz", "test", "aufgabe", "assignment"])
 
 
-def _looks_like_study_doc_request(prompt_lower: str) -> bool:
+def _looks_like_study_build_request(prompt_lower: str) -> bool:
     return any(
         term in prompt_lower
         for term in [
@@ -134,17 +136,18 @@ def _looks_like_do_request(prompt_lower: str) -> bool:
     )
 
 
-def _handle_study_doc_prompt(prompt: str) -> PromptResult:
-    run_dir = generate_study_document(
+def _handle_study_build_prompt(prompt: str) -> PromptResult:
+    run_dir = generate_study_build(
         prompt,
         output_format="markdown+pdf",
-        style="academic_study_guide",
+        quiz_access="ask",
+        max_repair_cycles=3,
     )
     payload = read_json(artifact_path(run_dir, "requests", "request.json"), default={})
     status = payload.get("status") or "completed"
     return PromptResult(
-        "study-document" if status == "completed" else str(status),
-        f"Generated study document with status {status}",
+        "study-build" if status == "completed" else str(status),
+        f"Generated study build with status {status}",
         run_dir,
     )
 
@@ -163,7 +166,7 @@ def _handle_quiz_prompt(
                 url,
                 answers_path=answers_path,
                 max_pages=max_pages,
-                force_fill=True,
+                bypass_review_only=True,
                 auto_answer=auto_answer,
             )
             no_activity = _fill_had_no_activity(run_dir)
@@ -208,6 +211,18 @@ def _handle_quiz_prompt(
         return _write_course_clarification(_new_request_dir(prompt), prompt, likely_courses)
 
     selected_course = likely_courses[0]
+    requested_activity = parse_requested_activity(prompt)
+    if requested_activity:
+        exact_result = _handle_exact_activity_prompt(
+            prompt,
+            selected_course,
+            answers_path=answers_path,
+            max_pages=max_pages,
+            auto_answer=auto_answer,
+        )
+        if exact_result is not None:
+            return exact_result
+
     quizzes = _discover_quizzes_for_course(selected_course)
     if not quizzes:
         return _write_clarification(
@@ -230,7 +245,7 @@ def _handle_quiz_prompt(
             target_quiz["url"],
             answers_path=answers_path,
             max_pages=max_pages,
-            force_fill=True,
+            bypass_review_only=True,
             auto_answer=auto_answer,
         )
         no_activity = _fill_had_no_activity(run_dir)
@@ -271,6 +286,105 @@ def _handle_quiz_prompt(
             "answer_template": str(template.relative_to(ROOT)),
         },
     )
+
+
+def _handle_exact_activity_prompt(
+    prompt: str,
+    selected_course: dict[str, Any],
+    *,
+    answers_path: Path | None,
+    max_pages: int,
+    auto_answer: bool,
+) -> PromptResult | None:
+    request_dir = _new_request_dir(prompt)
+    preflight = run_moodle_preflight(selected_course)
+    write_json(request_dir / "preflight.json", preflight)
+
+    browser = AgentBrowser(mode="read")
+    resolution = resolve_requested_activities(prompt, selected_course, browser=browser)
+    write_json(request_dir / "activity-resolution.json", resolution)
+    requested = resolution.get("requested")
+    if not requested:
+        return None
+    if resolution.get("missing"):
+        return _write_clarification(
+            request_dir,
+            prompt,
+            f"I resolved the course `{selected_course.get('title')}`, but could not find requested block(s): {resolution['missing']}.",
+            suggestions=[
+                "Check whether the block numbers are visible in Moodle.",
+                "Paste the exact quiz URL if the activity is hidden in a section.",
+            ],
+            extra={"activity_resolution": resolution},
+        )
+    resolved = resolution.get("resolved") or []
+    if not resolved:
+        return _write_clarification(
+            request_dir,
+            prompt,
+            f"I resolved the course `{selected_course.get('title')}`, but no matching quiz activities were visible.",
+            suggestions=["Paste the exact quiz URL, or refresh Moodle sync after checking login."],
+            extra={"activity_resolution": resolution},
+        )
+
+    validations = [validate_quiz_activity_url(activity, browser=browser) for activity in resolved]
+    write_json(request_dir / "activity-validation.json", validations)
+    stale = [item for item in validations if not item.get("ok")]
+    if stale:
+        return _write_clarification(
+            request_dir,
+            prompt,
+            "One or more resolved quiz URLs failed live Moodle validation.",
+            suggestions=["Open Moodle and confirm the activities are currently available.", "Run the request again after the course page is refreshed."],
+            extra={"activity_resolution": resolution, "activity_validation": validations},
+        )
+
+    if not (answers_path or auto_answer):
+        return _write_quiz_clarification(request_dir, prompt, selected_course, resolved)
+
+    child_runs: list[dict[str, Any]] = []
+    for activity in resolved:
+        run_dir = fill_quiz(
+            str(activity["url"]),
+            answers_path=answers_path,
+            max_pages=max_pages,
+            bypass_review_only=True,
+            auto_answer=auto_answer,
+        )
+        child_runs.append(
+            {
+                "title": activity.get("title"),
+                "url": activity.get("url"),
+                "run_dir": str(run_dir.relative_to(ROOT)),
+                "fill_results": str((run_dir / "fill-results.json").relative_to(ROOT)),
+                "fill_report": str((run_dir / "fill-report.md").relative_to(ROOT)),
+            }
+        )
+    payload = {
+        "created_at": utc_now(),
+        "prompt": prompt,
+        "selected_course": selected_course,
+        "activity_resolution": resolution,
+        "activity_validation": validations,
+        "runs": child_runs,
+        "final_submit_clicked": False,
+    }
+    write_json(request_dir / "multi-quiz-results.json", payload)
+    lines = [
+        "# Multi Quiz Fill Report",
+        "",
+        f"Prompt: {prompt}",
+        "",
+        f"Course: {selected_course.get('title')}",
+        "",
+        "## Runs",
+        "",
+    ]
+    for run in child_runs:
+        lines.append(f"- {run['title']}: `{run['fill_report']}`")
+    lines.extend(["", "Final submit was not clicked."])
+    (request_dir / "multi-quiz-report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return PromptResult("completed", f"Completed {len(child_runs)} exact quiz run(s)", request_dir)
 
 
 def _load_or_index_courses() -> list[dict[str, Any]]:
@@ -353,7 +467,23 @@ def _discover_quizzes_for_course(course: dict[str, Any]) -> list[dict[str, Any]]
             for quiz in card_quizzes
             if quiz.get("url")
         ]
-    browser = AgentBrowser()
+    browser = AgentBrowser(mode="read")
+    activities = discover_live_activities(course, browser=browser)
+    if activities:
+        return [
+            {
+                "title": activity.title,
+                "url": activity.url,
+                "content_hint": "quiz",
+                "course_id": course.get("id"),
+                "course_title": course.get("title"),
+                "activity_kind": activity.activity_kind,
+                "block_number": activity.block_number,
+                "source": "live_activity_discovery",
+            }
+            for activity in activities
+            if activity.type == "quiz"
+        ]
     browser.open(course["url"])
     browser.wait_load()
     links = browser.eval_json(MATERIAL_LINKS_JS)
@@ -513,7 +643,7 @@ def _write_clarification(
         "suggestions": suggestions,
         **(extra or {}),
     }
-    write_json(request_dir / "request.json", payload)
+    write_json(artifact_path(request_dir, "metadata", "request.json"), payload)
     lines = [
         "# Study Buddy Request",
         "",

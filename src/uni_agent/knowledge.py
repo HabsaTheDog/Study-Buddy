@@ -31,7 +31,7 @@ def load_synced_courses(*, refresh_if_missing: bool = False) -> list[dict[str, A
     if refresh_if_missing:
         from .sync import sync_moodle
 
-        sync_moodle(download=False)
+        sync_moodle(download=False, write_output=False)
         return load_synced_courses(refresh_if_missing=False)
     return []
 

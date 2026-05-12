@@ -4,11 +4,13 @@ import json
 import re
 import shutil
 import subprocess
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError, as_completed
 from pathlib import Path
 from typing import Any
 
 from .browser import AgentBrowser
 from .knowledge import course_brief_for_url, course_briefs_for_prompt
+from .retrieval import source_excerpts_for_question
 from .storage import ROOT, create_output_run_dir, env_with_dotenv, read_json, utc_now, write_json
 
 
@@ -88,6 +90,154 @@ def generate_answer_specs(
     return specs
 
 
+def generate_answer_specs_parallel(
+    questions: list[dict[str, Any]],
+    *,
+    page: dict[str, Any],
+    browser: AgentBrowser | None = None,
+    packet_root: Path | None = None,
+    page_number: int | None = None,
+    max_workers: int = 4,
+    timeout_seconds: int = 180,
+) -> list[dict[str, Any]]:
+    """Parallel subagent answer generation after all screenshots/packets are prepared.
+
+    Browser interaction is still serialized for screenshot capture. The expensive
+    subagent calls run concurrently and the caller mutates Moodle only after all
+    answers have been collected.
+    """
+
+    if len(questions) <= 1:
+        return generate_answer_specs(
+            questions,
+            page=page,
+            browser=browser,
+            packet_root=packet_root,
+            page_number=page_number,
+        )
+    if packet_root is None:
+        packet_root = create_output_run_dir("subagent", page.get("title") or "quiz")
+    page_dir = packet_root / f"page-{page_number or 1:03d}"
+    page_dir.mkdir(parents=True, exist_ok=True)
+    screenshot_path = page_dir / "page.png"
+    full_screenshot_path = page_dir / "page-full.png"
+    if browser is not None:
+        try:
+            _prepare_screenshot_viewport(browser)
+            browser.screenshot(screenshot_path)
+            browser.screenshot(full_screenshot_path, full_page=True)
+        except Exception:
+            pass
+    page_packet = {
+        "captured_at": utc_now(),
+        "page_number": page_number,
+        "title": page.get("title"),
+        "url": page.get("url"),
+        "body_text_excerpt": _trim_text(page.get("body_text"), 6000),
+        "question_count": len(questions),
+        "screenshot": _relative_or_absolute(screenshot_path) if screenshot_path.exists() else None,
+    }
+    write_json(page_dir / "page-packet.json", page_packet)
+
+    prepared: list[tuple[int, dict[str, Any], Path, Path | None, Path, Path]] = []
+    for index, question in enumerate(questions):
+        question_index = int(question.get("page_question_index") or question.get("question_index") or index + 1)
+        question_dir = page_dir / f"question-{question_index:03d}"
+        question_dir.mkdir(parents=True, exist_ok=True)
+        question_screenshot_path = _capture_question_screenshot(browser=browser, question=question, question_dir=question_dir)
+        packet = _build_question_packet(
+            question=question,
+            page=page,
+            page_packet=page_packet,
+            question_screenshot_path=question_screenshot_path,
+        )
+        packet_path = question_dir / "packet.json"
+        write_json(packet_path, packet)
+        prepared.append((index, question, packet_path, question_screenshot_path or screenshot_path, question_dir / "subagent-answer.json", question_dir / "subagent-transcript.txt"))
+
+    specs: list[dict[str, Any] | None] = [None] * len(prepared)
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(
+                _run_and_normalize_prepared_subagent,
+                question=question,
+                page=page,
+                packet_path=packet_path,
+                screenshot_path=screenshot_path if screenshot_path and screenshot_path.exists() else None,
+                response_path=response_path,
+                transcript_path=transcript_path,
+                timeout_seconds=timeout_seconds,
+            ): index
+            for index, question, packet_path, screenshot_path, response_path, transcript_path in prepared
+        }
+        try:
+            completed = as_completed(futures, timeout=timeout_seconds)
+            for future in completed:
+                index = futures[future]
+                try:
+                    specs[index] = future.result(timeout=1)
+                except Exception as exc:
+                    specs[index] = _subagent_error_spec(prepared[index][1], "subagent_parallel_error", str(exc))
+        except FuturesTimeoutError:
+            pass
+        for future, index in futures.items():
+            if specs[index] is not None:
+                continue
+            if future.done():
+                try:
+                    specs[index] = future.result(timeout=1)
+                except Exception as exc:
+                    specs[index] = _subagent_error_spec(prepared[index][1], "subagent_parallel_error", str(exc))
+            else:
+                future.cancel()
+                specs[index] = _subagent_error_spec(prepared[index][1], "subagent_timeout", f"Timed out after {timeout_seconds}s")
+    return [spec for spec in specs if spec is not None]
+
+
+def _subagent_error_spec(question: dict[str, Any], reason: str, detail: str) -> dict[str, Any]:
+    return {
+        "question_id": question.get("question_id"),
+        "question_index": question.get("question_index"),
+        "answers": [],
+        "answer": "",
+        "confidence": 0.0,
+        "citations": [],
+        "rationale": f"{reason}: {detail}",
+        "risk_flags": [reason],
+        "generated_by": "subagent",
+    }
+
+
+def _run_and_normalize_prepared_subagent(
+    *,
+    question: dict[str, Any],
+    page: dict[str, Any],
+    packet_path: Path,
+    screenshot_path: Path | None,
+    response_path: Path,
+    transcript_path: Path,
+    timeout_seconds: int | None = None,
+) -> dict[str, Any]:
+    subagent_result = _run_subagent(
+        packet_path=packet_path,
+        screenshot_path=screenshot_path,
+        response_path=response_path,
+        transcript_path=transcript_path,
+        timeout_override=timeout_seconds,
+    )
+    answer = _normalize_subagent_answer(
+        question=question,
+        page=page,
+        subagent_result=subagent_result,
+        packet_path=packet_path,
+        screenshot_path=screenshot_path,
+        response_path=response_path,
+        transcript_path=transcript_path,
+    )
+    write_json(packet_path.parent / "answer-spec.json", answer)
+    return answer
+
+
 def _answer_question_via_subagent(
     *,
     question: dict[str, Any],
@@ -150,18 +300,21 @@ def _build_question_packet(
         f"{page.get('title') or ''}\n{question.get('prompt') or ''}\n{question.get('visible_context') or ''}",
         limit=3,
     )
+    source_excerpts = _source_excerpts_for_question(question)
     return {
         "captured_at": utc_now(),
         "task": "answer_one_visible_moodle_quiz_question",
         "rules": [
             "Use the extracted question text, visible options/controls, Moodle page context, screenshot, and provided source excerpts.",
             "Return an empty answer with a risk flag when the screenshot/text is insufficient.",
-            "For radio/select questions, return one exact visible option text.",
-            "For checkbox/multi-select questions, return an array of exact visible option texts.",
+            "For radio/select questions, prefer returning an answers array with control_id or letter from option_objects.",
+            "For checkbox/multi-select questions, return an answers array with one object per selected control.",
+            "When MathJax option text is incomplete, do not guess by text; use control_id or letter only if the screenshot/options make it clear.",
             "For text/numeric questions, return the exact value that should be typed.",
             "Do not browse Moodle, do not control the browser, and do not submit anything.",
         ],
         "return_contract": {
+            "answers": [{"control_id": "visible control id when available", "letter": "option letter when available", "text": "visible option/value"}],
             "answer": "string | number | boolean | array | null",
             "confidence": "0..1; must be >= 0.65 to be fillable",
             "citations": "non-empty list; cite Moodle page and any local source excerpts used",
@@ -185,10 +338,13 @@ def _build_question_packet(
             "prompt": question.get("prompt"),
             "visible_context": question.get("visible_context"),
             "options": visible_options,
+            "option_objects": question.get("option_objects", []),
             "controls": question.get("controls", []),
+            "extraction_quality": question.get("extraction_quality", {}),
             "screenshot": _relative_or_absolute(question_screenshot_path) if question_screenshot_path else None,
         },
-        "source_excerpts": _source_excerpts_for_question(question),
+        "source_excerpts": source_excerpts,
+        "retrieval_status": "ok" if source_excerpts else "retrieval_failed",
     }
 
 
@@ -198,6 +354,7 @@ def _run_subagent(
     screenshot_path: Path | None,
     response_path: Path,
     transcript_path: Path,
+    timeout_override: int | None = None,
 ) -> dict[str, Any]:
     env = env_with_dotenv()
     configured = env.get("SUBAGENT_SOLVER_COMMAND", "").strip()
@@ -210,7 +367,7 @@ def _run_subagent(
             "returncode": None,
         }
 
-    timeout = int(env.get("SUBAGENT_TIMEOUT_SECONDS", "300"))
+    timeout = timeout_override or int(env.get("SUBAGENT_TIMEOUT_SECONDS", "300"))
     try:
         if configured:
             result = _run_custom_subagent_command(
@@ -476,6 +633,9 @@ def _normalize_citations(
 
 
 def _source_excerpts_for_question(question: dict[str, Any], limit: int = 4) -> list[dict[str, Any]]:
+    excerpts = source_excerpts_for_question(question, limit=limit)
+    if excerpts:
+        return excerpts
     index = read_json(ROOT / "state" / "document_index.json", default={})
     documents = index.get("documents", []) if isinstance(index, dict) else []
     terms = _question_terms(question)
@@ -488,18 +648,7 @@ def _source_excerpts_for_question(question: dict[str, Any], limit: int = 4) -> l
             normalized = text.casefold()
             score = sum(1 for term in terms if term in normalized)
             if score:
-                scored.append(
-                    (
-                        score,
-                        {
-                            "title": name,
-                            "kind": "local_document_excerpt",
-                            "path": path,
-                            "page": page.get("page"),
-                            "text": _trim_text(text, 1800),
-                        },
-                    )
-                )
+                scored.append((score, {"title": name, "kind": "local_document_excerpt", "path": path, "page": page.get("page"), "text": _trim_text(text, 1800)}))
     scored.sort(key=lambda item: item[0], reverse=True)
     return [item for _, item in scored[:limit]]
 

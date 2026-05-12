@@ -44,11 +44,11 @@ Use this routing before writing a response:
    - Natural language: `scripts/study_buddy.sh "<prompt>"`
    - Direct quiz URL: `scripts/quiz_assist.sh "<quiz-url>" --fill-safe --auto-answer`
 2. Study documents, summaries, Lernzettel, notes, Stoffuebersicht, exam guides:
-   - `scripts/study_doc.sh "<prompt>" --mode auto`
+   - `scripts/study_build.sh "<prompt>" --format markdown+pdf`
 3. Formula sheets, cheat sheets, Formelsammlung, Spickzettel:
-   - `scripts/study_doc.sh "<prompt>" --mode cheat-sheet`
+   - `scripts/study_build.sh "<prompt>" --format markdown+pdf`
 4. Assignment briefs or task extraction:
-   - `scripts/study_doc.sh "<prompt>" --mode assignment-brief`
+   - `scripts/study_build.sh "<prompt>" --format markdown+pdf`
 5. If no tool supports the request:
    - Inspect `state/course_agent_cards.json`, `state/moodle_sync_summary.json`, and local Moodle files under `data/moodle/`.
    - If needed, run `scripts/moodle_sync.sh` to refresh the baseline, then write an auditable artifact under `output/`.
@@ -63,7 +63,7 @@ Do not answer from memory while a local tool can inspect Moodle state, course fi
 - When continuing after a tool run, read the printed `Output:` path before deciding the next step.
 - If a tool creates a request directory with `clarification.md`, inspect it and either follow its suggested next command or use the closest specialized script.
 - Keep generated artifacts in `output/` and reference their exact path in the final response.
-- For main tool runs, prefer one self-contained run directory directly under `output/`. Final user-facing files should live at the run root. Source metadata should use `source-manifest.json` and `SOURCES.md`; create `source-files/` only when local source files are actually copied.
+- For main tool runs, prefer one self-contained run directory directly under `output/`. Final user-facing files should live at the run root. Build inputs, model responses, metadata, and copied source files should live under sorted `artifacts/` subfolders.
 - If a previous assistant produced the wrong artifact, correct course by using the routing rules above; do not defend or repeat the earlier path.
 - When the request is in German, produce the user-facing artifact in German unless the source material or user explicitly asks otherwise.
 - For math-heavy study documents, use readable mathematical notation instead of ASCII code-style formulas; prefer symbols such as `ω`, `φ`, `α`, `Δ`, `π`, `√`, `≤`, `≥`, and `·` where appropriate.
@@ -129,8 +129,9 @@ Use these defaults in fresh contexts:
 
 - For natural-language requests, run `scripts/study_buddy.sh "<prompt>"`.
 - Before manual course selection, use the synced course cards in `state/course_agent_cards.json` as the compact map of known Moodle courses and activity/resource links.
-- For study documents and learning artifacts, prefer `scripts/study_doc.sh` after the first runner attempt or directly when the prompt is clearly a document request.
-- For "Formelsammlung", "formula sheet", "cheat sheet", or "Spickzettel", run `scripts/study_doc.sh "<prompt>" --mode cheat-sheet`.
+- For study documents and learning artifacts, prefer `scripts/study_build.sh` after the first runner attempt or directly when the prompt is clearly a document request.
+- For "Formelsammlung", "formula sheet", "cheat sheet", or "Spickzettel", run `scripts/study_build.sh "<prompt>" --format markdown+pdf`.
+- If a document request asks for Moodle-like quiz questions, `study-build` must ask for explicit quiz-opening permission before opening any quiz/test page. Do not use old quiz outputs as a substitute for permission.
 - For "do/fill/solve/bearbeite" quiz prompts, the prompt runner auto-enables answer generation.
 - For direct quiz URLs, use `scripts/quiz_assist.sh "<quiz-url>" --fill-safe --auto-answer`.
 - Do not add `--max-pages 1` unless the user explicitly asks for a one-page test.
@@ -142,8 +143,8 @@ Canonical examples:
 ```bash
 scripts/study_buddy.sh "do the next math quiz"
 scripts/study_buddy.sh "bearbeite den nächsten Mathe-Test"
-scripts/study_doc.sh "erstelle eine Formelsammlung für DYN2" --mode cheat-sheet
-scripts/study_doc.sh "erstelle einen Lernzettel für Integralrechnung" --mode auto
+scripts/study_build.sh "erstelle eine Formelsammlung für DYN2" --format markdown+pdf
+scripts/study_build.sh "erstelle einen Lernzettel für Integralrechnung" --format markdown+pdf
 scripts/quiz_assist.sh "https://moodle.technikum-wien.at/mod/quiz/view.php?id=..." --fill-safe --auto-answer
 ```
 

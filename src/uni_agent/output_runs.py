@@ -12,12 +12,12 @@ ARTIFACT_SUBDIRS = {
     "metadata",
     "requests",
     "responses",
+    "sources",
 }
 
 
 def ensure_run_layout(run_dir: Path) -> None:
     run_dir.mkdir(parents=True, exist_ok=True)
-    (run_dir / "artifacts").mkdir(parents=True, exist_ok=True)
 
 
 def artifact_dir(run_dir: Path, category: str) -> Path:
@@ -55,9 +55,29 @@ def copy_artifacts(run_dir: Path, artifact_specs: list[tuple[str, str]]) -> list
     return artifacts
 
 
+def publish_public_files(run_dir: Path, artifact_specs: list[tuple[str, str]]) -> list[dict[str, Any]]:
+    ensure_run_layout(run_dir)
+    published: list[dict[str, Any]] = []
+    for category, name in artifact_specs:
+        source = artifact_path(run_dir, category, name)
+        if not source.exists() or not source.is_file():
+            continue
+        target = run_dir / source.name
+        if source.resolve() != target.resolve():
+            shutil.copyfile(source, target)
+        published.append(
+            {
+                "name": target.name,
+                "path": str(target.relative_to(ROOT)),
+                "source_path": str(source.relative_to(ROOT)),
+            }
+        )
+    return published
+
+
 def write_source_bundle(run_dir: Path, sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
     ensure_run_layout(run_dir)
-    file_dir = run_dir / "source-files"
+    file_dir = artifact_dir(run_dir, "sources") / "files"
 
     copied_by_path: dict[str, str] = {}
     entries: list[dict[str, Any]] = []
@@ -86,7 +106,7 @@ def write_source_bundle(run_dir: Path, sources: list[dict[str, Any]]) -> list[di
         entries.append(entry)
 
     write_json(
-        artifact_path(run_dir, "metadata", "source-manifest.json"),
+        artifact_path(run_dir, "sources", "source-manifest.json"),
         {
             "generated_at": utc_now(),
             "source_count": len(entries),
@@ -114,7 +134,7 @@ def write_run_manifest(
             "run_type": run_type,
             "status": status,
             "artifacts": artifacts,
-            "sources_manifest": str(artifact_path(run_dir, "metadata", "source-manifest.json").relative_to(ROOT)),
+            "sources_manifest": str(artifact_path(run_dir, "sources", "source-manifest.json").relative_to(ROOT)),
             "source_count": len(sources),
         },
     )
@@ -124,7 +144,7 @@ def _write_source_readme(path: Path, sources: list[dict[str, Any]]) -> None:
     lines = [
         "# Sources",
         "",
-        "This file lists the sources used by this run. Local copies are placed in `source-files/` when available.",
+        "This file lists the sources used by this run. Local copies are placed in `artifacts/sources/files/` when available.",
         "",
     ]
     if not sources:

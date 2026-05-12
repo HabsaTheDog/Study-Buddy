@@ -46,9 +46,9 @@ scripts/study_buddy.sh "do the next math quiz"
 scripts/study_buddy.sh "do the next math quiz" --auto-answer
 scripts/study_buddy.sh "do the next math quiz" --answers answers.json
 scripts/study_buddy.sh "generate a study guide for Integralrechnung 2"
-scripts/study_doc.sh "DYN2" --mode exam-study-guide
-scripts/study_doc.sh "summarize MAES2 definite integrals as a PDF" --mode summary
-scripts/study_doc.sh "make a formula sheet for DYN2" --mode cheat-sheet
+scripts/study_build.sh "DYN2 exam study guide" --format markdown+pdf
+scripts/study_build.sh "summarize MAES2 definite integrals as a PDF" --format markdown+pdf
+scripts/study_build.sh "make a formula sheet for DYN2" --format markdown+pdf
 scripts/quiz_assist.sh <quiz-url>
 scripts/quiz_assist.sh <quiz-url> --fill-safe --auto-answer
 scripts/quiz_assist.sh <quiz-url> --fill-safe --answers answers.json
@@ -87,8 +87,7 @@ visible page content. Use `--no-download` for a fast metadata-only refresh, or
 Other tools consume the sync output as their compact course map:
 
 - `study_buddy.sh` uses course cards for course/quiz routing.
-- `study_doc.sh` uses course cards to choose the target course, then uses the
-  local document index for source excerpts.
+- `study_build.sh` uses course cards and the local document index to plan resources, build a source bundle, render Markdown/Typst/PDF, and review the result.
 - Quiz subagent packets include the matching course card context when available.
 
 Outputs are written under:
@@ -113,73 +112,57 @@ scripts/moodle_sync.sh --download-limit-per-course 20
 python3 -m uni_agent.orchestrator sync
 ```
 
-## Study Documents and PDFs
+## Study Build Documents and PDFs
 
-Study-guide, summary, Lernzettel, cheat-sheet, assignment-brief, and notes
-prompts are routed to the study document generator. It selects local indexed
-Moodle material from `state/document_index.json`, generates a citation-backed
-document, writes auditable Markdown and Typst source, and compiles a PDF when
-`typst` is available.
+Study-guide, summary, Lernzettel, formula-sheet, assignment-brief, and notes
+prompts are routed to the `study-build` pipeline. The orchestrator selects a
+course, plans relevant resources, builds a source bundle, sends that bundle to a
+specialized builder, renders Markdown/Typst/PDF, and runs a final reviewer. If a
+request asks for Moodle-like quiz questions, the pipeline stops and asks for
+explicit permission before opening any quiz/test page.
 
-The generator supports explicit document modes:
+Direct commands:
 
 ```bash
-scripts/study_doc.sh "DYN2" --mode exam-study-guide
-scripts/study_doc.sh "Integralrechnung" --mode summary
-scripts/study_doc.sh "DYN2" --mode cheat-sheet
-python3 -m uni_agent.orchestrator study-doc "DYN2" --mode exam-study-guide --format markdown+pdf
+scripts/study_build.sh "DYN2 exam study guide" --format markdown+pdf
+scripts/study_build.sh "Integralrechnung Zusammenfassung" --format markdown+pdf
+scripts/study_build.sh "DYN2 Formelsammlung" --format markdown+pdf
+python3 -m uni_agent.orchestrator study-build "DYN2 exam study guide" --format markdown+pdf
 ```
 
-Exam study guides use a learning-focused schema with topic maps, formula cards,
-problem-solving methods, practice plans, self-checks, common mistakes, and a
-source appendix. The main body uses compact source IDs instead of repeated full
-file paths.
+Quiz access policy for document generation:
+
+- `--quiz-access ask` is the default. The run stops with
+  `needs-quiz-authorization` before opening any quiz/test page.
+- `--quiz-access none` ignores quiz pages and builds self-check questions only
+  from theory sources.
+- `--quiz-access authorized` is reserved for a current user instruction naming
+  exactly which quiz views may be opened. Final submission remains forbidden.
 
 Outputs are written under:
 
 ```text
-output/<timestamp>_study-doc_<slug>/
+output/<timestamp>_study-build_<slug>/
 ```
 
 Expected files include:
 
 ```text
-request.json
-sources.json
-study-guide.json
-study-guide.md
-study-guide.typ
-render-result.json
-study-guide.pdf          # only when Typst compilation succeeds
-run-manifest.json
-source-manifest.json     # structured source list with pages
+study-build.md
+study-build.pdf          # only when Typst compilation succeeds
+REVIEW.md
 SOURCES.md               # human-readable source list
-source-files/            # only created when referenced local files are copied
+artifacts/               # build inputs, model responses, metadata, copied sources
 ```
 
-Direct command:
+Builder and reviewer model hooks are optional. Without them, `study-build` uses
+the local deterministic fallback so the pipeline remains auditable and testable.
+
+Useful study-build settings:
 
 ```bash
-scripts/study_doc.sh "generate a study guide for integralrechnung"
-python3 -m uni_agent.orchestrator study-doc "summary of Integralrechnung" --format markdown
-```
-
-By default the generator uses `codex exec` in a read-only subprocess when
-available. Generator failures fail the run so timeouts and schema issues remain
-visible while debugging. Set `STUDY_DOC_GENERATOR_COMMAND` to a custom command.
-Set `STUDY_DOC_GENERATOR_REQUIRED=false` only when a deterministic fallback is
-acceptable.
-
-Useful study document settings:
-
-```bash
-STUDY_DOC_LANGUAGE=de
-STUDY_DOC_GENERATOR_REQUIRED=true
-STUDY_DOC_CODEX_REASONING_EFFORT=medium
-# STUDY_DOC_CODEX_MODEL=gpt-5.4
-STUDY_DOC_CITATION_STYLE=endnotes
-STUDY_DOC_DEFAULT_MODE=auto
-STUDY_DOC_TIMEOUT_SECONDS=180
+STUDY_BUILD_BUILDER_COMMAND='... {packet} ... {output} ...'
+STUDY_BUILD_REVIEWER_COMMAND='... {packet} ... {output} ...'
 ```
 
 ## Guarded Quiz Filling

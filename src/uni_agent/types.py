@@ -33,6 +33,12 @@ class QuizQuestionPacket:
     options: list[str]
     visible_context: str
     allowed_sources: list[SourceRef]
+    question_index: int | None = None
+    prompt_text: str | None = None
+    prompt_latex: str | None = None
+    prompt_html: str | None = None
+    option_objects: list[dict[str, Any]] | None = None
+    extraction_quality: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)

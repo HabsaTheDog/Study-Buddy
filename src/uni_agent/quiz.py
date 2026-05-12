@@ -6,13 +6,35 @@ from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from .browser import AgentBrowser
+from .locks import moodle_write_lock
+from .preflight import validate_quiz_activity_url
+from .quiz_state import (
+    click_finish_attempt_to_summary,
+    click_next_page,
+    click_start_or_continue_attempt,
+    detect_quiz_page_state,
+    verify_questions_persisted,
+)
 from .safety import find_submit_risks, should_use_review_only
 from .storage import create_output_run_dir, read_json, utc_now, write_json
-from .subagents import generate_answer_specs
+from .subagents import generate_answer_specs_parallel
 
 
 QUESTION_EXTRACTION_JS = r"""
 (() => {
+  const normalize = value => (value || "").replace(/\s+/g, " ").trim();
+  const mathText = node => {
+    if (!node) return "";
+    const bits = [];
+    for (const math of node.querySelectorAll("mjx-container, math, .MathJax, .MathJax_Display")) {
+      bits.push(math.getAttribute("aria-label") || math.getAttribute("data-semantic-speech") || math.innerText || math.textContent || "");
+    }
+    return normalize(bits.join(" "));
+  };
+  const optionLetter = text => {
+    const match = normalize(text).match(/^([a-z])\s*[.)]/i);
+    return match ? match[1].toLowerCase() : null;
+  };
   const questionNodes = [...document.querySelectorAll(".que, [id^='question-']")];
   const questions = questionNodes.map((node, index) => {
     const promptNode = node.querySelector(".qtext") || node;
@@ -28,26 +50,57 @@ QUESTION_EXTRACTION_JS = r"""
         const labels = [...(el.labels || [])].map(label => label.innerText.trim()).filter(Boolean);
         const optionContainer = el.closest("label, .r0, .r1, .answer div, p, li");
         const optionText = labels[0] || (optionContainer ? optionContainer.innerText.trim() : "");
+        const optionHtml = optionContainer ? optionContainer.innerHTML : "";
+        const optionMath = mathText(optionContainer || el);
         return {
           tag: el.tagName.toLowerCase(),
           type: (el.type || el.tagName).toLowerCase(),
           id: el.id || null,
+          control_id: el.id || null,
           name: el.name || null,
           value: el.value || "",
           checked: Boolean(el.checked),
           disabled: Boolean(el.disabled),
-          option_text: optionText
+          option_text: optionText,
+          letter: optionLetter(optionText),
+          latex: optionMath,
+          raw_html: optionHtml
         };
       });
+    const optionObjects = controls
+      .filter(control => ["radio", "checkbox"].includes(control.type) || control.tag === "option")
+      .map(control => ({
+        control_id: control.control_id,
+        letter: control.letter,
+        text: control.option_text,
+        latex: control.latex,
+        raw_html: control.raw_html,
+        checked: control.checked,
+        disabled: control.disabled
+      }));
+    const hasMath = Boolean(mathText(node));
+    const optionTextComplete = optionObjects.every(option => {
+      const text = normalize(option.text);
+      return !/^[a-z]\s*[.)]?$/i.test(text) || Boolean(option.latex);
+    });
     return {
       question_id: node.id || `question-${index + 1}`,
       question_index: questionNumber,
       page_question_index: index + 1,
       question_type: [...node.classList].find(c => c !== "que") || "unknown",
       prompt: (promptNode.innerText || "").trim(),
+      prompt_text: (promptNode.innerText || "").trim(),
+      prompt_latex: mathText(promptNode),
+      prompt_html: promptNode.innerHTML || "",
       options: [...new Set(options)].slice(0, 20),
+      option_objects: optionObjects,
       controls,
-      visible_context: visibleText
+      visible_context: visibleText,
+      extraction_quality: {
+        has_math: hasMath,
+        math_text_complete: !hasMath || Boolean(mathText(node)),
+        option_text_complete: optionTextComplete
+      }
     };
   });
   return JSON.stringify({
@@ -169,26 +222,82 @@ def assist_quiz(url: str) -> Path:
     return run_dir
 
 
+def verify_quiz(url: str) -> Path:
+    browser = AgentBrowser(mode="read")
+    browser.open(url)
+    browser.wait_load()
+    verification = _verify_summary_or_visible_page(browser)
+    run_dir = create_output_run_dir("quiz-verify", browser.get_title() or "quiz")
+    write_json(run_dir / "summary-verification.json", verification)
+    lines = [
+        f"# Quiz Verification: {browser.get_title() or 'Untitled'}",
+        "",
+        f"- Captured: {utc_now()}",
+        f"- URL: {browser.get_url()}",
+        "",
+        "Final submit was not clicked.",
+    ]
+    (run_dir / "verify-report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    browser.screenshot(run_dir / "page.png")
+    return run_dir
+
+
 def fill_quiz(
     url: str,
     answers_path: Path | None,
     *,
     max_pages: int = 100,
     start_attempt: bool = True,
-    force_fill: bool = False,
+    bypass_review_only: bool = False,
+    auto_answer: bool = False,
+) -> Path:
+    with moodle_write_lock():
+        return _fill_quiz_impl(
+            url,
+            answers_path,
+            max_pages=max_pages,
+            start_attempt=start_attempt,
+            bypass_review_only=bypass_review_only,
+            auto_answer=auto_answer,
+        )
+
+
+def _fill_quiz_impl(
+    url: str,
+    answers_path: Path | None,
+    *,
+    max_pages: int = 100,
+    start_attempt: bool = True,
+    bypass_review_only: bool = False,
     auto_answer: bool = False,
 ) -> Path:
     answers = _load_answer_specs(answers_path) if answers_path else []
     if not answers and not auto_answer:
         raise RuntimeError("fill_quiz requires answers_path unless auto_answer=True.")
     browser = AgentBrowser()
+    validation = None
+    if "/mod/quiz/view.php" in url:
+        validation = validate_quiz_activity_url({"url": url, "cmid": _cmid_from_url(url)}, browser=browser)
+        if not validation.get("ok"):
+            run_dir = create_output_run_dir("quiz-fill", "stale-url")
+            write_json(run_dir / "preflight.json", validation)
+            return _write_fill_report(
+                page={"title": "stale_url", "url": url, "questions": []},
+                url=url,
+                fill_results=[],
+                review_only=True,
+                risk_flags=["stale_url"],
+                message="Refused to fill because live Moodle validation failed for the quiz URL.",
+                stop_reason="stale_url",
+                run_dir=run_dir,
+            )
     browser.open(url)
     browser.wait_load()
 
     page = browser.eval_json(QUESTION_EXTRACTION_JS)
     if start_attempt and not page.get("questions"):
         review_only, risk_flags = should_use_review_only(page.get("body_text", ""))
-        if review_only and not force_fill:
+        if review_only and not bypass_review_only:
             return _write_fill_report(
                 page=page,
                 url=url,
@@ -197,12 +306,12 @@ def fill_quiz(
                 risk_flags=risk_flags,
                 message="Refused to start attempt because the quiz is not classified as safe practice/example content.",
             )
-        if review_only and force_fill:
-            risk_flags.append("force-fill-override-enabled")
-        started = browser.eval_json(START_ATTEMPT_JS)
+        if review_only and bypass_review_only:
+            risk_flags.append("review-only-override-enabled")
+        started = click_start_or_continue_attempt(browser)
         if started.get("clicked"):
             browser.wait_load()
-            modal_started = browser.eval_json(START_ATTEMPT_JS)
+            modal_started = click_start_or_continue_attempt(browser)
             if modal_started.get("clicked"):
                 browser.wait_load()
         page = browser.eval_json(QUESTION_EXTRACTION_JS)
@@ -214,33 +323,37 @@ def fill_quiz(
 
     initial_page = browser.eval_json(QUESTION_EXTRACTION_JS)
     run_dir = create_output_run_dir("quiz-fill", initial_page.get("title") or "quiz")
+    if validation:
+        write_json(run_dir / "preflight.json", validation)
 
     all_results: list[dict[str, Any]] = []
+    page_results: list[dict[str, Any]] = []
     final_risk_flags: list[str] = []
     review_only = False
-    if force_fill:
-        final_risk_flags.append("force-fill-override-enabled")
+    if bypass_review_only:
+        final_risk_flags.append("review-only-override-enabled")
 
     subagent_packet_root: Path | None = None
     stop_reason = "max-pages-reached"
     for page_number in range(1, max_pages + 1):
         page = browser.eval_json(QUESTION_EXTRACTION_JS)
+        page_state = detect_quiz_page_state(browser)
         review_only, risk_flags = should_use_review_only(page.get("body_text", ""))
         submit_risks = find_submit_risks(page.get("body_text", ""))
         final_risk_flags.extend(risk_flags)
         final_risk_flags.extend([f"submit-control-visible:{risk}" for risk in submit_risks])
 
-        if review_only and not force_fill:
+        if review_only and not bypass_review_only:
             stop_reason = "review-only"
             break
-        if force_fill:
+        if bypass_review_only:
             review_only = False
 
         if auto_answer and subagent_packet_root is None:
             subagent_packet_root = run_dir / "subagent-packets"
 
         page_answers = (
-            generate_answer_specs(
+            generate_answer_specs_parallel(
                 page.get("questions", []),
                 page=page,
                 browser=browser,
@@ -260,14 +373,33 @@ def fill_quiz(
         if page_number >= max_pages:
             stop_reason = "max-pages-reached"
             break
-        next_result = browser.eval_json(NEXT_PAGE_JS)
-        all_results.append({"action": "next_page", **next_result, "page_number": page_number})
+        next_result = click_next_page(browser)
+        navigation_action = "next_page"
+        if not next_result.get("clicked"):
+            next_result = click_finish_attempt_to_summary(browser)
+            navigation_action = "finish_attempt_to_summary"
+        all_results.append({"action": navigation_action, **next_result, "page_number": page_number})
+        page_results.append(
+            {
+                "page_number": page_number,
+                "state": page_state,
+                "fill_results": fill_results,
+                "navigation": {"action": navigation_action, **next_result},
+            }
+        )
         if not next_result.get("clicked"):
             stop_reason = "no-safe-next-page"
             break
         browser.wait_load()
+        if navigation_action == "finish_attempt_to_summary":
+            stop_reason = "summary-reached"
+            break
 
     final_page = browser.eval_json(QUESTION_EXTRACTION_JS)
+    summary_verification = _verify_summary_or_visible_page(browser)
+    write_json(run_dir / "attempt-state.json", detect_quiz_page_state(browser))
+    write_json(run_dir / "page-results.json", page_results)
+    write_json(run_dir / "summary-verification.json", summary_verification)
     return _write_fill_report(
         page=final_page,
         url=url,
@@ -275,17 +407,18 @@ def fill_quiz(
         review_only=review_only,
         risk_flags=sorted(set(final_risk_flags)),
         message=(
-            "Subagent-generated and force-filled eligible visible answers; stopped before final submission."
-            if auto_answer and force_fill
+            "Subagent-generated and filled eligible visible answers after review-only override; stopped before final submission."
+            if auto_answer and bypass_review_only
             else "Subagent-generated and filled eligible visible answers; stopped before final submission."
             if auto_answer
-            else "Force-filled eligible visible answers for testing and stopped before final submission."
-            if force_fill
+            else "Filled eligible visible answers after review-only override and stopped before final submission."
+            if bypass_review_only
             else "Filled eligible visible answers and stopped before final submission."
         ),
         stop_reason=stop_reason,
         screenshot_browser=browser,
         run_dir=run_dir,
+        summary_verification=summary_verification,
     )
 
 
@@ -311,6 +444,29 @@ def _first_attempt_page_url(url: str) -> str | None:
         return None
     query["page"] = "0"
     return urlunparse(parsed._replace(query=urlencode(query)))
+
+
+def _cmid_from_url(url: str) -> str:
+    parsed = urlparse(url)
+    return str(dict(parse_qsl(parsed.query, keep_blank_values=True)).get("id") or "")
+
+
+def _verify_summary_or_visible_page(browser: AgentBrowser) -> dict[str, Any]:
+    state = detect_quiz_page_state(browser)
+    if state.get("state") == "summary":
+        rows = browser.eval_json(r"""
+(() => {
+  const text = document.body ? document.body.innerText : "";
+  const rows = [];
+  for (const tr of document.querySelectorAll("tr")) {
+    const cells = [...tr.querySelectorAll("th,td")].map(cell => (cell.innerText || "").replace(/\s+/g, " ").trim()).filter(Boolean);
+    if (cells.length >= 2 && /^\d+$/.test(cells[0])) rows.push({ question_index: Number(cells[0]), moodle_status: cells.slice(1).join(" ") });
+  }
+  return JSON.stringify({ rows, body_excerpt: text.slice(0, 2000) });
+})()
+""")
+        return {"state": state, "summary": rows, "final_submit_clicked": False}
+    return {"state": state, "visible_questions": verify_questions_persisted(browser), "final_submit_clicked": False}
 
 
 def _fill_visible_questions(
@@ -340,6 +496,7 @@ def _fill_visible_questions(
                     "filled": False,
                     "reason": validation_error,
                     "answer": answer.get("answer"),
+                    "answers": answer.get("answers"),
                     "confidence": answer.get("confidence"),
                     "citations": answer.get("citations", []),
                     "rationale": answer.get("rationale"),
@@ -356,7 +513,9 @@ def _fill_visible_questions(
                 "filled": bool(result.get("filled")),
                 "reason": result.get("reason"),
                 "control": result.get("control"),
+                "matched_by": result.get("matched_by"),
                 "answer": answer.get("answer"),
+                "answers": answer.get("answers"),
                 "confidence": answer.get("confidence"),
                 "citations": answer.get("citations", []),
                 "rationale": answer.get("rationale"),
@@ -385,7 +544,7 @@ def _match_answer(question: dict[str, Any], answers: list[dict[str, Any]]) -> di
 
 
 def _validate_answer_spec(answer: dict[str, Any]) -> str | None:
-    if "answer" not in answer:
+    if "answer" not in answer and "answers" not in answer:
         return "answer-missing"
     if float(answer.get("confidence", 0)) < 0.65:
         return "confidence-below-threshold"
@@ -398,17 +557,31 @@ def _validate_answer_spec(answer: dict[str, Any]) -> str | None:
     return None
 
 
+def _answer_values(answer: dict[str, Any]) -> list[Any]:
+    if isinstance(answer.get("answers"), list):
+        return answer["answers"]
+    value = answer.get("answer")
+    if isinstance(value, list):
+        return value
+    return [value]
+
+
 def _fill_question_js(question: dict[str, Any], answer: dict[str, Any]) -> str:
     qid = question.get("question_id")
-    answer_value = answer.get("answer")
+    answer_value = _answer_values(answer)
     return f"""
 (() => {{
   const question = document.getElementById({json.dumps(qid)});
   const answer = {json.dumps(answer_value)};
   if (!question) return JSON.stringify({{ filled: false, reason: "question-not-found" }});
-  const values = Array.isArray(answer) ? answer.map(String) : [String(answer)];
-  const normalize = value => value.toLowerCase().replace(/\\s+/g, " ").trim();
+  const rawValues = Array.isArray(answer) ? answer : [answer];
+  const values = rawValues.map(value => typeof value === "object" && value !== null ? value : {{ text: String(value) }});
+  const normalize = value => String(value || "").toLowerCase().replace(/\\s+/g, " ").trim();
   const compact = value => normalize(value).replace(/\\s+/g, "");
+  const letterOf = value => {{
+    const match = normalize(value).match(/^([a-z])\\s*[.)]?/);
+    return match ? match[1] : "";
+  }};
   const collapseMathjaxDuplicate = value => {{
     const parts = normalize(value).split(" ").filter(Boolean);
     if (parts.length % 2 !== 0) return normalize(value);
@@ -434,7 +607,7 @@ def _fill_question_js(question: dict[str, Any], answer: dict[str, Any]) -> str:
   if (textControls.length) {{
     const control = textControls[0];
     control.focus();
-    control.value = values[0];
+    control.value = String(values[0].text ?? values[0].value ?? "");
     control.dispatchEvent(new Event("input", {{ bubbles: true }}));
     control.dispatchEvent(new Event("change", {{ bubbles: true }}));
     return JSON.stringify({{
@@ -447,14 +620,38 @@ def _fill_question_js(question: dict[str, Any], answer: dict[str, Any]) -> str:
   const choiceControls = [...question.querySelectorAll("input[type='radio'], input[type='checkbox']")]
     .filter(el => !el.disabled);
   let changed = 0;
-  for (const expected of values.map(normalize)) {{
+  const matchedControls = [];
+  for (const expectedSpec of values) {{
+    const expected = normalize(String(expectedSpec.text ?? expectedSpec.answer ?? expectedSpec.value ?? ""));
+    const expectedLetter = normalize(String(expectedSpec.letter ?? "")) || letterOf(expected);
+    const expectedControlId = String(expectedSpec.control_id ?? expectedSpec.id ?? "");
+    const expectedName = String(expectedSpec.name ?? "");
+    const expectedValue = String(expectedSpec.value ?? "");
     let matched = null;
+    let matchedBy = null;
     for (const control of choiceControls) {{
       const labels = [...(control.labels || [])].map(label => label.innerText).join(" ");
       const container = control.closest("label, .r0, .r1, .answer div, p, li");
       const optionText = normalize(labels || (container ? container.innerText : "") || control.value || "");
+      const optionLetter = letterOf(optionText);
+      if (expectedControlId && control.id === expectedControlId) {{
+        matched = control;
+        matchedBy = "control_id";
+        break;
+      }}
+      if (expectedName && expectedValue && control.name === expectedName && String(control.value) === expectedValue) {{
+        matched = control;
+        matchedBy = "name_value";
+        break;
+      }}
+      if (expectedLetter && optionLetter && expectedLetter === optionLetter) {{
+        matched = control;
+        matchedBy = "letter";
+        break;
+      }}
       if (equivalent(expected, optionText) || equivalent(expected, control.value || "")) {{
         matched = control;
+        matchedBy = "text";
         break;
       }}
     }}
@@ -463,15 +660,16 @@ def _fill_question_js(question: dict[str, Any], answer: dict[str, Any]) -> str:
       matched.dispatchEvent(new Event("input", {{ bubbles: true }}));
       matched.dispatchEvent(new Event("change", {{ bubbles: true }}));
       changed += 1;
+      matchedControls.push({{ id: matched.id || null, name: matched.name || null, matched_by: matchedBy }});
     }}
   }}
   if (changed) {{
-    return JSON.stringify({{ filled: true, reason: "filled-choice", control: {{ count: changed }} }});
+    return JSON.stringify({{ filled: true, reason: "filled-choice", matched_by: matchedControls.map(item => item.matched_by).join(","), control: {{ count: changed, matched: matchedControls }} }});
   }}
 
   const select = question.querySelector("select:not([disabled])");
   if (select) {{
-    const expected = normalize(values[0]);
+    const expected = normalize(String(values[0].text ?? values[0].value ?? ""));
     const option = [...select.options].find(opt => {{
       const text = normalize(opt.text || "");
       const value = normalize(opt.value || "");
@@ -503,6 +701,7 @@ def _write_fill_report(
     stop_reason: str = "unknown",
     screenshot_browser: AgentBrowser | None = None,
     run_dir: Path | None = None,
+    summary_verification: dict[str, Any] | None = None,
 ) -> Path:
     if run_dir is None:
         run_dir = create_output_run_dir("quiz-fill", page.get("title") or "quiz")
@@ -519,6 +718,7 @@ def _write_fill_report(
             "stop_reason": stop_reason,
             "results": fill_results,
             "questions": page.get("questions", []),
+            "summary_verification": summary_verification or {},
         },
     )
     lines = [
@@ -540,12 +740,25 @@ def _write_fill_report(
         lines.append("")
     if fill_results:
         for result in fill_results:
+            if result.get("action"):
+                lines.append(f"- action {result.get('action')}: clicked={result.get('clicked')} text={result.get('text')}")
+                continue
             lines.append(
                 f"- question {result.get('question_index')}: "
                 f"{'filled' if result.get('filled') else 'not filled'} ({result.get('reason')})"
+                + (f", matched_by={result.get('matched_by')}" if result.get("matched_by") else "")
             )
     else:
         lines.append("- No answers were filled.")
+    if summary_verification:
+        lines.extend(["", "## Moodle Persistence Verification", ""])
+        summary = summary_verification.get("summary", {})
+        rows = summary.get("rows", []) if isinstance(summary, dict) else []
+        visible = summary_verification.get("visible_questions", [])
+        for row in rows:
+            lines.append(f"- question {row.get('question_index')}: {row.get('moodle_status')}")
+        for item in visible:
+            lines.append(f"- {item.get('question_id')}: {item.get('moodle_status')} persisted={item.get('saved')}")
     lines.extend(["", "Final submit was not clicked."])
     (run_dir / "fill-report.md").write_text("\n".join(lines), encoding="utf-8")
     if screenshot_browser:
