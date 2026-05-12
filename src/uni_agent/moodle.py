@@ -39,19 +39,21 @@ def login() -> dict:
     login_needed = _is_login_or_timeout_page(browser.get_url(), browser.get_title(), snapshot)
 
     if login_needed:
-        _dismiss_login_overlays(browser)
-        filled_username = _try_fill(browser, selectors["username_selectors"], env["MOODLE_USERNAME"])
-        filled_password = _try_fill(browser, selectors["password_selectors"], env["MOODLE_PASSWORD"])
-        if not filled_username or not filled_password:
-            raise AgentBrowserError("Could not find Moodle username/password fields.")
-        clicked = _try_click(browser, selectors["submit_selectors"])
-        if not clicked:
-            browser.run(["press", "Enter"], check=False)
-        browser.wait_load()
+        _submit_login_form(browser, selectors, env["MOODLE_USERNAME"], env["MOODLE_PASSWORD"])
 
     url_after = browser.get_url()
     title = browser.get_title()
     snapshot_after = browser.snapshot(interactive=True)
+    if _is_login_or_timeout_page(url_after, title, snapshot_after):
+        browser.open(env["MOODLE_DASHBOARD_URL"])
+        browser.wait_load()
+        retry_snapshot = browser.snapshot(interactive=True)
+        if _is_login_or_timeout_page(browser.get_url(), browser.get_title(), retry_snapshot):
+            _submit_login_form(browser, selectors, env["MOODLE_USERNAME"], env["MOODLE_PASSWORD"])
+            url_after = browser.get_url()
+            title = browser.get_title()
+            snapshot_after = browser.snapshot(interactive=True)
+
     if _is_login_or_timeout_page(url_after, title, snapshot_after):
         raise AgentBrowserError(
             "Moodle login did not complete; still on login or session-timeout page. "
@@ -77,8 +79,20 @@ def _is_login_or_timeout_page(url: str, title: str, snapshot: str) -> bool:
     return has_login_form and has_login_context
 
 
+def _submit_login_form(browser: AgentBrowser, selectors: dict, username: str, password: str) -> None:
+    _dismiss_login_overlays(browser)
+    filled_username = _try_fill(browser, selectors["username_selectors"], username)
+    filled_password = _try_fill(browser, selectors["password_selectors"], password)
+    if not filled_username or not filled_password:
+        raise AgentBrowserError("Could not find Moodle username/password fields.")
+    clicked = _try_click(browser, selectors["submit_selectors"])
+    if not clicked:
+        browser.run(["press", "Enter"], check=False)
+    browser.wait_load()
+
+
 def _dismiss_login_overlays(browser: AgentBrowser) -> None:
-    _try_click(
+    clicked = _try_click(
         browser,
         [
             "text=Continue",
@@ -89,6 +103,8 @@ def _dismiss_login_overlays(browser: AgentBrowser) -> None:
             "button:has-text('Weiter')",
         ],
     )
+    if clicked:
+        browser.wait_load()
 
 
 def _try_fill(browser: AgentBrowser, selectors: list[str], value: str) -> bool:
