@@ -1,6 +1,6 @@
 # Uni-Agent
 
-Local Codex CLI workspace for a FH Technikum Wien Moodle assistant.
+Local Moodle assistant workspace for FH Technikum Wien.
 
 The assistant is designed to:
 
@@ -41,6 +41,7 @@ scripts/moodle_course_index.sh
 scripts/moodle_sync.sh
 scripts/moodle_sync.sh --no-download
 scripts/moodle_download_materials.sh --course-limit 3 --download-limit 5
+scripts/agent_provider_probe.sh
 scripts/study_buddy.sh "find the next math quiz"
 scripts/study_buddy.sh "do the next math quiz"
 scripts/study_buddy.sh "do the next math quiz" --auto-answer
@@ -64,7 +65,7 @@ known quiz/activity URL. If no sync exists, it falls back to the older course
 indexing path and can trigger a fast metadata-only sync when no course index is
 available.
 
-`--auto-answer` creates one isolated packet per visible question inside the current quiz run folder. Each packet contains extracted question text, visible controls/options, Moodle page metadata, local source excerpts, and a page screenshot. By default the runner calls `codex exec` as a read-only subagent when available. Set `SUBAGENT_SOLVER_COMMAND` to a custom command, or set it to `off` to only generate packets and leave questions unfilled.
+`--auto-answer` creates one isolated packet per visible question inside the current quiz run folder. Each packet contains extracted question text, visible controls/options, Moodle page metadata, local source excerpts, and a page screenshot. The runner asks a configured agent provider to answer the packet. Auto provider selection prefers Codex when installed, then a configured custom command. Set `SUBAGENT_SOLVER_COMMAND` to a custom command, or set it to `off` to only generate packets and leave questions unfilled.
 
 Quiz filling defaults to a `--max-pages` cap of 100, so it attempts the whole quiz until Moodle has no safe next-page navigation left. Lower this value only for testing.
 
@@ -112,6 +113,39 @@ scripts/moodle_sync.sh --download-limit-per-course 20
 python3 -m uni_agent.orchestrator sync
 ```
 
+## Agent Providers
+
+LLM-backed work is routed through provider adapters instead of hard-coding one
+CLI. The Python orchestrator remains responsible for Moodle login, browser
+control, safety checks, packet creation, validation, and final no-submit
+guardrails. Providers receive only local packet JSON, optional screenshot paths,
+an optional schema path, and an output path.
+
+Provider diagnostics:
+
+```bash
+scripts/agent_provider_probe.sh
+python3 -m uni_agent.orchestrator providers
+```
+
+Configuration lives in `config/agent_providers.json` and `.env`:
+
+```bash
+STUDY_BUDDY_AGENT_PROVIDER=auto
+STUDY_BUDDY_AGENT_COMMAND='... {packet} ... {output} ... {schema} ... {screenshot} ... {prompt_file} ...'
+
+SUBAGENT_SOLVER_PROVIDER=
+SUBAGENT_SOLVER_COMMAND=
+STUDY_BUILD_BUILDER_PROVIDER=
+STUDY_BUILD_BUILDER_COMMAND=
+STUDY_BUILD_REVIEWER_PROVIDER=
+STUDY_BUILD_REVIEWER_COMMAND=
+```
+
+Selection order is task command hook, task provider, global provider, auto
+detection, then disabled. Existing command hooks remain compatible and take
+precedence.
+
 ## Study Build Documents and PDFs
 
 Study-guide, summary, Lernzettel, formula-sheet, assignment-brief, and notes
@@ -155,14 +189,17 @@ SOURCES.md               # human-readable source list
 artifacts/               # build inputs, model responses, metadata, copied sources
 ```
 
-Builder and reviewer model hooks are optional. Without them, `study-build` uses
-the local deterministic fallback so the pipeline remains auditable and testable.
+Builder and reviewer model hooks are optional. If no provider is configured or
+available, `study-build` uses the local deterministic fallback so the pipeline
+remains auditable and testable.
 
 Useful study-build settings:
 
 ```bash
-STUDY_BUILD_BUILDER_COMMAND='... {packet} ... {output} ...'
-STUDY_BUILD_REVIEWER_COMMAND='... {packet} ... {output} ...'
+STUDY_BUILD_BUILDER_PROVIDER=custom
+STUDY_BUILD_BUILDER_COMMAND='... {packet} ... {output} ... {schema} ... {prompt_file} ...'
+STUDY_BUILD_REVIEWER_PROVIDER=custom
+STUDY_BUILD_REVIEWER_COMMAND='... {packet} ... {output} ... {schema} ... {prompt_file} ...'
 ```
 
 ## Guarded Quiz Filling

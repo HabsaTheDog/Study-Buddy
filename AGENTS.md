@@ -1,6 +1,6 @@
 # Uni-Agent Operating Instructions
 
-This repository is the local Codex CLI workspace for the FH Technikum Wien Moodle assistant.
+This repository is the local Moodle assistant workspace for the FH Technikum Wien Moodle assistant.
 
 ## Mission
 
@@ -228,9 +228,21 @@ Subagent answer generation:
 
 - No deterministic in-process quiz solver is used.
 - Each visible question is packaged as `packet.json` with page metadata, question text, controls/options, source excerpts, and screenshot path.
-- Default backend: `codex exec` in read-only mode with `config/subagent_answer.schema.json`.
-- Optional custom backend: set `SUBAGENT_SOLVER_COMMAND`; placeholders are `{packet}`, `{screenshot}`, `{output}`, `{schema}`, and `{root}`.
+- Backends are selected through the agent provider registry. Auto selection prefers Codex when installed, then a configured custom command.
+- Optional custom backend: set `SUBAGENT_SOLVER_COMMAND`; placeholders are `{packet}`, `{screenshot}`, `{output}`, `{schema}`, `{root}`, and `{prompt_file}`.
+- Optional provider backend: set `SUBAGENT_SOLVER_PROVIDER`, or set global `STUDY_BUDDY_AGENT_PROVIDER`.
 - Disable backend for packet-only debugging with `SUBAGENT_SOLVER_COMMAND=off`.
+
+## Agent Provider Rules
+
+- The Python orchestrator is the only component allowed to control Moodle or `agent-browser`.
+- Agent providers receive only packet JSON, optional screenshot paths, optional schemas, prompts, and output paths.
+- Provider output must be JSON; the repository validates confidence, citations, risk flags, and visible-option matching before filling Moodle controls.
+- Probe configured providers with `scripts/agent_provider_probe.sh` or `python3 -m uni_agent.orchestrator providers`.
+- Existing command hooks remain supported and take precedence over provider selection:
+  - `SUBAGENT_SOLVER_COMMAND`
+  - `STUDY_BUILD_BUILDER_COMMAND`
+  - `STUDY_BUILD_REVIEWER_COMMAND`
 
 Unsupported questions must be reported as unfilled rather than guessed.
 

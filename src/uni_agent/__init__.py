@@ -9,6 +9,7 @@ __all__ = [
     "moodle",
     "orchestrator",
     "output_runs",
+    "providers",
     "quiz",
     "safety",
     "storage",

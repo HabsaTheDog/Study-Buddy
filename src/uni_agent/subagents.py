@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import json
 import re
-import shutil
 import subprocess
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError, as_completed
 from pathlib import Path
@@ -10,6 +8,8 @@ from typing import Any
 
 from .browser import AgentBrowser
 from .knowledge import course_brief_for_url, course_briefs_for_prompt
+from .providers import AgentTask, resolve_provider
+from .providers.base import result_to_dict, write_agent_transcript
 from .retrieval import source_excerpts_for_question
 from .storage import ROOT, create_output_run_dir, env_with_dotenv, read_json, utc_now, write_json
 
@@ -357,35 +357,27 @@ def _run_subagent(
     timeout_override: int | None = None,
 ) -> dict[str, Any]:
     env = env_with_dotenv()
-    configured = env.get("SUBAGENT_SOLVER_COMMAND", "").strip()
-    if configured.casefold() in {"0", "false", "off", "none", "disabled"}:
-        return {
-            "ok": False,
-            "reason": "subagent-command-disabled",
-            "stdout": "",
-            "stderr": "",
-            "returncode": None,
-        }
-
-    timeout = timeout_override or int(env.get("SUBAGENT_TIMEOUT_SECONDS", "300"))
+    timeout = timeout_override or int(env.get("SUBAGENT_TIMEOUT_SECONDS") or env.get("STUDY_BUDDY_AGENT_TIMEOUT_SECONDS") or "300")
+    task = AgentTask(
+        kind="quiz_subagent",
+        packet_path=packet_path,
+        output_path=response_path,
+        transcript_path=transcript_path,
+        schema_path=ANSWER_SCHEMA_PATH,
+        screenshot_path=screenshot_path,
+        prompt=_codex_subagent_prompt(packet_path=packet_path, screenshot_path=screenshot_path),
+        timeout_seconds=timeout,
+        cwd=ROOT,
+        env=env,
+    )
+    selection = resolve_provider(
+        env=env,
+        task_kind="quiz_subagent",
+        command_env="SUBAGENT_SOLVER_COMMAND",
+        provider_env="SUBAGENT_SOLVER_PROVIDER",
+    )
     try:
-        if configured:
-            result = _run_custom_subagent_command(
-                command_template=configured,
-                packet_path=packet_path,
-                screenshot_path=screenshot_path,
-                response_path=response_path,
-                env=env,
-                timeout=timeout,
-            )
-        else:
-            result = _run_codex_subagent(
-                packet_path=packet_path,
-                screenshot_path=screenshot_path,
-                response_path=response_path,
-                env=env,
-                timeout=timeout,
-            )
+        result = selection.provider.run(task)
     except FileNotFoundError as exc:
         return {
             "ok": False,
@@ -402,145 +394,22 @@ def _run_subagent(
             "stderr": exc.stderr or "",
             "returncode": None,
         }
-
-    transcript = {
-        "command": result.get("command"),
-        "returncode": result.get("returncode"),
-        "stdout": result.get("stdout", ""),
-        "stderr": result.get("stderr", ""),
-        "response_path": _relative_or_absolute(response_path),
-    }
-    transcript_path.write_text(json.dumps(transcript, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-
-    response_text = ""
-    if response_path.exists():
-        response_text = response_path.read_text(encoding="utf-8").strip()
-    if not response_text:
-        response_text = result.get("stdout", "").strip()
-
-    parsed = _parse_json_response(response_text)
-    if result.get("returncode") != 0:
+    write_agent_transcript(task, result)
+    parsed = result.parsed
+    if result.ok and parsed is not None:
+        write_json(response_path, parsed)
         return {
-            "ok": False,
-            "reason": "subagent-nonzero-exit",
-            "stdout": result.get("stdout", ""),
-            "stderr": result.get("stderr", ""),
-            "returncode": result.get("returncode"),
+            "ok": True,
+            "reason": "subagent-answer",
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+            "returncode": result.returncode,
             "parsed": parsed,
+            "provider": result.provider,
         }
-    if parsed is None:
-        return {
-            "ok": False,
-            "reason": "subagent-invalid-json",
-            "stdout": result.get("stdout", ""),
-            "stderr": result.get("stderr", ""),
-            "returncode": result.get("returncode"),
-        }
-    write_json(response_path, parsed)
     return {
-        "ok": True,
-        "reason": "subagent-answer",
-        "stdout": result.get("stdout", ""),
-        "stderr": result.get("stderr", ""),
-        "returncode": result.get("returncode"),
-        "parsed": parsed,
-    }
-
-
-def _run_custom_subagent_command(
-    *,
-    command_template: str,
-    packet_path: Path,
-    screenshot_path: Path | None,
-    response_path: Path,
-    env: dict[str, str],
-    timeout: int,
-) -> dict[str, Any]:
-    command = command_template.format(
-        packet=str(packet_path),
-        screenshot=str(screenshot_path or ""),
-        output=str(response_path),
-        schema=str(ANSWER_SCHEMA_PATH),
-        root=str(ROOT),
-    )
-    command_env = {
-        **env,
-        "SUBAGENT_PACKET_PATH": str(packet_path),
-        "SUBAGENT_SCREENSHOT_PATH": str(screenshot_path or ""),
-        "SUBAGENT_OUTPUT_PATH": str(response_path),
-        "SUBAGENT_SCHEMA_PATH": str(ANSWER_SCHEMA_PATH),
-    }
-    completed = subprocess.run(
-        command,
-        cwd=ROOT,
-        env=command_env,
-        shell=True,
-        text=True,
-        capture_output=True,
-        timeout=timeout,
-    )
-    return {
-        "command": command,
-        "returncode": completed.returncode,
-        "stdout": completed.stdout,
-        "stderr": completed.stderr,
-    }
-
-
-def _run_codex_subagent(
-    *,
-    packet_path: Path,
-    screenshot_path: Path | None,
-    response_path: Path,
-    env: dict[str, str],
-    timeout: int,
-) -> dict[str, Any]:
-    codex = shutil.which("codex")
-    if not codex:
-        return {
-            "command": None,
-            "returncode": 127,
-            "stdout": "",
-            "stderr": "codex executable not found and SUBAGENT_SOLVER_COMMAND is not configured",
-        }
-
-    prompt = _codex_subagent_prompt(packet_path=packet_path, screenshot_path=screenshot_path)
-    command = [
-        codex,
-        "exec",
-        "--cd",
-        str(ROOT),
-        "--skip-git-repo-check",
-        "--ephemeral",
-        "--sandbox",
-        "read-only",
-        "--output-schema",
-        str(ANSWER_SCHEMA_PATH),
-        "--output-last-message",
-        str(response_path),
-    ]
-    if screenshot_path is not None and screenshot_path.exists():
-        command.extend(["--image", str(screenshot_path)])
-    command_env = {
-        **env,
-        "SUBAGENT_PACKET_PATH": str(packet_path),
-        "SUBAGENT_SCREENSHOT_PATH": str(screenshot_path or ""),
-        "SUBAGENT_OUTPUT_PATH": str(response_path),
-    }
-    completed = subprocess.run(
-        command,
-        input=prompt,
-        cwd=ROOT,
-        env=command_env,
-        text=True,
-        capture_output=True,
-        timeout=timeout,
-    )
-    return {
-        "command": command,
-        "returncode": completed.returncode,
-        "stdout": completed.stdout,
-        "stderr": completed.stderr,
+        **result_to_dict(result),
+        "reason": _subagent_reason(result.reason),
     }
 
 
@@ -561,6 +430,19 @@ Answer exactly one visible question. Use only the packet, attached screenshot, a
 
 Return JSON only matching the schema. If the answer is a visible option, copy the exact option text from packet.question.options or packet.question.controls. If there are multiple correct checkbox options, return an array of exact option texts. If the question is ambiguous, image text is unreadable, source support is missing, or you are not confident, return answer null or "", confidence below 0.65, and a specific risk flag.
 """
+
+
+def _subagent_reason(reason: str) -> str:
+    mapping = {
+        "agent-command-not-found": "subagent-command-not-found",
+        "agent-command-not-configured": "subagent-command-not-found",
+        "agent-provider-disabled": "subagent-command-disabled",
+        "agent-nonzero-exit": "subagent-nonzero-exit",
+        "agent-invalid-json": "subagent-invalid-json",
+        "agent-timeout": "subagent-timeout",
+        "agent-provider-unknown": "subagent-command-not-found",
+    }
+    return mapping.get(reason, reason if reason.startswith("subagent-") else f"subagent-{reason}")
 
 
 def _normalize_subagent_answer(
@@ -685,29 +567,6 @@ def _visible_options(question: dict[str, Any]) -> list[str]:
         if text and text not in options:
             options.append(text)
     return options
-
-
-def _parse_json_response(text: str) -> dict[str, Any] | None:
-    if not text:
-        return None
-    cleaned = text.strip()
-    if cleaned.startswith("```"):
-        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
-        cleaned = re.sub(r"\s*```$", "", cleaned)
-    try:
-        parsed = json.loads(cleaned)
-        return parsed if isinstance(parsed, dict) else None
-    except json.JSONDecodeError:
-        pass
-    start = cleaned.find("{")
-    end = cleaned.rfind("}")
-    if start >= 0 and end > start:
-        try:
-            parsed = json.loads(cleaned[start : end + 1])
-            return parsed if isinstance(parsed, dict) else None
-        except json.JSONDecodeError:
-            return None
-    return None
 
 
 def _coerce_confidence(value: Any) -> float:

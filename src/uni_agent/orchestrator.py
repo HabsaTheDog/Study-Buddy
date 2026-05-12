@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 
 from .courses import index_courses
 from .documents import download_materials, refresh_document_index
@@ -8,8 +9,9 @@ from .activities import resolve_requested_activities
 from .browser import AgentBrowser
 from .knowledge import load_synced_courses
 from .moodle import login, snapshot
+from .providers import provider_diagnostics
 from .quiz import assist_quiz, fill_quiz, verify_quiz
-from .storage import ROOT, create_output_run_dir, ensure_dirs, read_json, write_json
+from .storage import ROOT, create_output_run_dir, ensure_dirs, env_with_dotenv, read_json, write_json
 from .study_build import generate_study_build
 from .sync import sync_moodle
 
@@ -29,6 +31,7 @@ def main() -> None:
     materials_parser.add_argument("--course-limit", type=int, default=0)
 
     subparsers.add_parser("documents")
+    subparsers.add_parser("providers")
 
     sync_parser = subparsers.add_parser("sync")
     sync_parser.add_argument("--course-limit", type=int, default=0)
@@ -104,6 +107,10 @@ def main() -> None:
     elif args.command == "documents":
         target = refresh_document_index()
         print(f"Wrote {target.relative_to(target.parents[1])}")
+    elif args.command == "providers":
+        diagnostics = provider_diagnostics(env_with_dotenv())
+        write_json(ROOT / "state" / "agent_provider_diagnostics.json", diagnostics)
+        print(json.dumps(diagnostics, indent=2, ensure_ascii=False))
     elif args.command == "sync":
         run_dir = sync_moodle(
             course_limit=args.course_limit or None,
