@@ -18,6 +18,8 @@ def build_document_draft(bundle: ResourceBundle, run_dir: Path, *, cycle: int = 
             "Use only the provided resource bundle.",
             "Adapt layout to the user's purpose and content density.",
             "Return cited content only. Use source_ids from source_map.",
+            "If required_sections contains worked_solution, solve the requested worksheet/task directly; do not produce a generic theory summary.",
+            "For worked_solution, cite the matching worksheet source and explicitly address the requested sheet/task numbers from bundle.intent.",
             "If quiz access was not authorized, do not claim real Moodle quiz extraction; approximate quiz style from theory sources only.",
             "Put solutions at the very end when requested.",
         ],
@@ -87,7 +89,7 @@ def _draft_from_model_response(payload: dict[str, Any], bundle: ResourceBundle) 
 
 
 def _local_builder_draft(bundle: ResourceBundle, *, repair_request: dict[str, Any] | None = None) -> DocumentDraft:
-    sections = _sections_from_chunks(bundle.source_chunks, complete=bundle.intent.wants_complete_theory)
+    sections = _exact_exercise_sections(bundle) if _is_exact_exercise_request(bundle) else _sections_from_chunks(bundle.source_chunks, complete=bundle.intent.wants_complete_theory)
     if not sections:
         sections = [
             DocumentSection(
@@ -100,20 +102,69 @@ def _local_builder_draft(bundle: ResourceBundle, *, repair_request: dict[str, An
     risk_flags = []
     if bundle.intent.wants_quiz_style and not bundle.quiz_permission.get("allowed"):
         risk_flags.append("quiz-access-not-authorized; questions derived from theory sources only")
+    if _is_exact_exercise_request(bundle):
+        risk_flags.append("exact-exercise-fallback-no-worked-solution")
     if repair_request:
         risk_flags.append("rebuilt-after-review-request")
     return DocumentDraft(
         title=_default_title(bundle),
-        subtitle="Theorie, Selbstkontrolle und Lösungen aus geplanten Moodle-Ressourcen",
+        subtitle="Aufgabentext und Lösung aus geplanten Moodle-Ressourcen" if _is_exact_exercise_request(bundle) else "Theorie, Selbstkontrolle und Lösungen aus geplanten Moodle-Ressourcen",
         course=(bundle.selected_course or {}).get("title"),
         language=bundle.intent.language,
-        layout=LayoutSpec(document_style="study_guide", density="normal", include_toc=True, quiz_solutions_position="end"),
+        layout=LayoutSpec(document_style="worked_solution" if _is_exact_exercise_request(bundle) else "study_guide", density="normal", include_toc=True, quiz_solutions_position="end"),
         sections=sections,
         quiz_questions=quiz_questions,
         source_map=_source_map(bundle),
         requirements_trace=bundle.coverage_matrix,
         risk_flags=risk_flags,
     )
+
+
+def _is_exact_exercise_request(bundle: ResourceBundle) -> bool:
+    return bundle.intent.requested_sheet_number is not None or bundle.intent.requested_task_number is not None
+
+
+def _exact_exercise_sections(bundle: ResourceBundle) -> list[DocumentSection]:
+    sections: list[DocumentSection] = []
+    for chunk in bundle.source_chunks[:6]:
+        body: list[str] = []
+        task_text = _extract_requested_task_text(chunk.text, bundle.intent.requested_task_number)
+        if task_text:
+            body.append(f"Aufgabentext aus der Quelle: {task_text}")
+        else:
+            body.append("Die passende Aufgabenquelle wurde gefunden. Für eine vollständige Lösung muss der Builder die angegebenen Quellenauszüge auswerten.")
+        body.append(
+            "Not sufficiently sourced. Do not use as final answer."
+            if not task_text
+            else "Diese lokale Fallback-Ausgabe extrahiert die Aufgabe, ersetzt aber keine ausgearbeitete Modelllösung."
+        )
+        sections.append(
+            DocumentSection(
+                heading=_exact_exercise_heading(bundle),
+                body=body,
+                source_ids=[chunk.source_id],
+            )
+        )
+    return sections
+
+
+def _extract_requested_task_text(text: str, task_number: int | None) -> str:
+    cleaned = " ".join(text.split())
+    if task_number is None:
+        return cleaned[:900]
+    match = re.search(rf"(Aufgabe\s*0*{task_number}\b.*?)(?=\s+Aufgabe\s+\d+\b|$)", cleaned, flags=re.IGNORECASE)
+    if not match:
+        return ""
+    return match.group(1)[:1200]
+
+
+def _exact_exercise_heading(bundle: ResourceBundle) -> str:
+    parts = []
+    if bundle.intent.requested_sheet_number is not None:
+        parts.append(f"Übungsblatt {bundle.intent.requested_sheet_number}")
+    if bundle.intent.requested_task_number is not None:
+        parts.append(f"Aufgabe {bundle.intent.requested_task_number}")
+    return " - ".join(parts) if parts else "Aufgabe"
 
 
 def _sections_from_chunks(chunks: list[SourceChunk], *, complete: bool) -> list[DocumentSection]:
@@ -207,5 +258,7 @@ def _source_map(bundle: ResourceBundle) -> list[dict[str, Any]]:
 
 
 def _default_title(bundle: ResourceBundle) -> str:
+    if _is_exact_exercise_request(bundle):
+        return _exact_exercise_heading(bundle)
     topic = bundle.intent.course_hint or (bundle.selected_course or {}).get("title") or "Studienunterlage"
     return f"{topic} - Theoriezusammenfassung"

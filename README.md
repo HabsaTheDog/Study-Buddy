@@ -17,7 +17,7 @@ The agent must never perform a final Moodle submission. It can ask isolated suba
 ```bash
 npm install
 npm run browser:install
-python3 -m pip install -r requirements.txt
+python -m pip install -r requirements.txt
 ```
 
 Typst is optional but required for PDF compilation. Without it, study document
@@ -32,32 +32,46 @@ sudo dnf install typst
 
 Create a local `.env` from `.env.example`. `.env` is ignored by Git.
 
+Windows-specific setup and PowerShell examples are documented in
+[docs/windows.md](docs/windows.md).
+
+macOS-specific setup notes are documented in
+[docs/macos.md](docs/macos.md).
+
 ## Common Commands
 
 ```bash
-scripts/moodle_login.sh
-scripts/moodle_snapshot.sh https://moodle.technikum-wien.at/my/
-scripts/moodle_course_index.sh
-scripts/moodle_sync.sh
-scripts/moodle_sync.sh --no-download
-scripts/moodle_download_materials.sh --course-limit 3 --download-limit 5
-scripts/agent_provider_probe.sh
-scripts/study_buddy.sh "find the next math quiz"
-scripts/study_buddy.sh "do the next math quiz"
-scripts/study_buddy.sh "do the next math quiz" --auto-answer
-scripts/study_buddy.sh "do the next math quiz" --answers answers.json
-scripts/study_buddy.sh "generate a study guide for Integralrechnung 2"
-scripts/study_build.sh "DYN2 exam study guide" --format markdown+pdf
-scripts/study_build.sh "summarize MAES2 definite integrals as a PDF" --format markdown+pdf
-scripts/study_build.sh "make a formula sheet for DYN2" --format markdown+pdf
-scripts/quiz_assist.sh <quiz-url>
-scripts/quiz_assist.sh <quiz-url> --fill-safe --auto-answer
-scripts/quiz_assist.sh <quiz-url> --fill-safe --answers answers.json
+npm run moodle:login
+npm run moodle:snapshot -- https://moodle.technikum-wien.at/my/
+npm run moodle:courses
+npm run moodle:sync
+npm run moodle:sync -- --no-download
+npm run moodle:materials -- --course-limit 3 --download-limit 5
+npm run providers
+npm run study:buddy -- "find the next math quiz"
+npm run study:buddy -- "do the next math quiz"
+npm run study:buddy -- "do the next math quiz" --auto-answer
+npm run study:buddy -- "do the next math quiz" --answers answers.json
+npm run study:buddy -- "generate a study guide for Integralrechnung 2"
+npm run study:build -- "DYN2 exam study guide" --format markdown+pdf
+npm run study:build -- "summarize MAES2 definite integrals as a PDF" --format markdown+pdf
+npm run study:build -- "make a formula sheet for DYN2" --format markdown+pdf
+npm run quiz:assist -- <quiz-url>
+npm run quiz:assist -- <quiz-url> --fill-safe --auto-answer
+npm run quiz:assist -- <quiz-url> --fill-safe --answers answers.json
 ```
+
+The npm commands are the cross-platform entrypoints for Windows, Linux, and
+macOS. The `scripts/*.sh` wrappers are kept for Unix shells and call the same
+Python modules.
 
 ## Prompt Runner
 
-`scripts/study_buddy.sh` accepts natural-language prompts and maps them to Moodle actions. It can identify likely courses and quizzes from prompts like `next math quiz`, inspect a selected quiz, create an answer template, ask subagents to answer questions from extracted text/screenshots, or fill a quiz from a provided answer JSON.
+`npm run study:buddy -- "<prompt>"` accepts natural-language prompts and maps
+them to Moodle actions. It can identify likely courses and quizzes from prompts
+like `next math quiz`, inspect a selected quiz, create an answer template, ask
+subagents to answer questions from extracted text/screenshots, or fill a quiz
+from a provided answer JSON.
 
 The prompt runner prefers the synced course cards in
 `state/course_agent_cards.json` when routing a prompt to a Moodle course or
@@ -73,7 +87,7 @@ If the prompt is ambiguous, it writes one clarification folder directly under `o
 
 ## Moodle Sync
 
-`scripts/moodle_sync.sh` is the one-command live Moodle refresh. It logs in,
+`npm run moodle:sync` is the one-command live Moodle refresh. It logs in,
 indexes all visible Moodle courses, opens each course page, extracts compact
 activity/resource links, downloads accessible course files, refreshes the local
 document index, and writes agent course cards.
@@ -87,8 +101,8 @@ visible page content. Use `--no-download` for a fast metadata-only refresh, or
 
 Other tools consume the sync output as their compact course map:
 
-- `study_buddy.sh` uses course cards for course/quiz routing.
-- `study_build.sh` uses course cards and the local document index to plan resources, build a source bundle, render Markdown/Typst/PDF, and review the result.
+- `npm run study:buddy -- ...` uses course cards for course/quiz routing.
+- `npm run study:build -- ...` uses course cards and the local document index to plan resources, build a source bundle, render Markdown/Typst/PDF, and review the result.
 - Quiz subagent packets include the matching course card context when available.
 
 Outputs are written under:
@@ -105,12 +119,12 @@ state/document_index.json
 Useful commands:
 
 ```bash
-scripts/moodle_sync.sh
-scripts/moodle_sync.sh --course-limit 3
-scripts/moodle_sync.sh --no-download
-scripts/moodle_sync.sh --incremental
-scripts/moodle_sync.sh --download-limit-per-course 20
-python3 -m uni_agent.orchestrator sync
+npm run moodle:sync
+npm run moodle:sync -- --course-limit 3
+npm run moodle:sync -- --no-download
+npm run moodle:sync -- --incremental
+npm run moodle:sync -- --download-limit-per-course 20
+npm run py -- -m uni_agent.orchestrator sync
 ```
 
 ## Agent Providers
@@ -124,8 +138,8 @@ an optional schema path, and an output path.
 Provider diagnostics:
 
 ```bash
-scripts/agent_provider_probe.sh
-python3 -m uni_agent.orchestrator providers
+npm run providers
+npm run py -- -m uni_agent.orchestrator providers
 ```
 
 Configuration lives in `config/agent_providers.json` and `.env`:
@@ -136,6 +150,8 @@ STUDY_BUDDY_AGENT_COMMAND='... {packet} ... {output} ... {schema} ... {screensho
 
 SUBAGENT_SOLVER_PROVIDER=
 SUBAGENT_SOLVER_COMMAND=
+DOCUMENT_BUILD_SECTION_PROVIDER=
+DOCUMENT_BUILD_SECTION_COMMAND=
 STUDY_BUILD_BUILDER_PROVIDER=
 STUDY_BUILD_BUILDER_COMMAND=
 STUDY_BUILD_REVIEWER_PROVIDER=
@@ -146,22 +162,25 @@ Selection order is task command hook, task provider, global provider, auto
 detection, then disabled. Existing command hooks remain compatible and take
 precedence.
 
-## Study Build Documents and PDFs
+## Adaptive Document Build Documents and PDFs
 
 Study-guide, summary, Lernzettel, formula-sheet, assignment-brief, and notes
-prompts are routed to the `study-build` pipeline. The orchestrator selects a
-course, plans relevant resources, builds a source bundle, sends that bundle to a
-specialized builder, renders Markdown/Typst/PDF, and runs a final reviewer. If a
-request asks for Moodle-like quiz questions, the pipeline stops and asks for
-explicit permission before opening any quiz/test page.
+prompts are routed through the `study-build` command into the adaptive
+`document-build` pipeline. The orchestrator selects a template, syncs current
+Moodle sources by default, plans only the relevant resources, renders
+Markdown/PDF only after review passes, and never falls back to old `output/`
+artifacts as sources. If a request asks for Moodle-like quiz questions, the
+pipeline stops and asks for explicit permission before opening any quiz/test
+page.
 
 Direct commands:
 
 ```bash
-scripts/study_build.sh "DYN2 exam study guide" --format markdown+pdf
-scripts/study_build.sh "Integralrechnung Zusammenfassung" --format markdown+pdf
-scripts/study_build.sh "DYN2 Formelsammlung" --format markdown+pdf
-python3 -m uni_agent.orchestrator study-build "DYN2 exam study guide" --format markdown+pdf
+npm run study:build -- "DYN2 exam study guide" --format markdown+pdf
+npm run study:build -- "Integralrechnung Zusammenfassung" --format markdown+pdf
+npm run study:build -- "DYN2 Formelsammlung" --format markdown+pdf
+npm run study:build -- "Löse alle Übungen mit Kreuzerl" --format markdown+pdf --template math_worked_solutions
+npm run py -- -m uni_agent.orchestrator study-build "DYN2 exam study guide" --format markdown+pdf
 ```
 
 Quiz access policy for document generation:
@@ -183,23 +202,24 @@ Expected files include:
 
 ```text
 study-build.md
-study-build.pdf          # only when Typst compilation succeeds
+document-build.pdf       # only after source preflight and review pass
+document-build.md
+study-build.pdf          # compatibility copy when rendering succeeds
 REVIEW.md
 SOURCES.md               # human-readable source list
 artifacts/               # build inputs, model responses, metadata, copied sources
 ```
 
-Builder and reviewer model hooks are optional. If no provider is configured or
-available, `study-build` uses the local deterministic fallback so the pipeline
-remains auditable and testable.
+Adaptive document-build section hooks are optional. Math worked-solution
+sections require a model-backed builder; without one the review fails and no PDF
+is rendered. General summaries can still use the local deterministic builder for
+auditable drafts.
 
-Useful study-build settings:
+Useful adaptive document-build settings:
 
 ```bash
-STUDY_BUILD_BUILDER_PROVIDER=custom
-STUDY_BUILD_BUILDER_COMMAND='... {packet} ... {output} ... {schema} ... {prompt_file} ...'
-STUDY_BUILD_REVIEWER_PROVIDER=custom
-STUDY_BUILD_REVIEWER_COMMAND='... {packet} ... {output} ... {schema} ... {prompt_file} ...'
+DOCUMENT_BUILD_SECTION_PROVIDER=custom
+DOCUMENT_BUILD_SECTION_COMMAND='... {packet} ... {output} ... {schema} ... {prompt_file} ...'
 ```
 
 ## Guarded Quiz Filling

@@ -8,5 +8,6 @@ fi
 
 cd "$(dirname "$0")/.."
 export PYTHONPATH="${PYTHONPATH:-}:$PWD/src"
+PYTHON_BIN="${PYTHON:-python3}"
 
-python3 -m uni_agent.orchestrator quiz "$@"
+"$PYTHON_BIN" -m uni_agent.orchestrator quiz "$@"

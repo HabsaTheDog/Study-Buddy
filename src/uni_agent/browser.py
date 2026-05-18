@@ -67,9 +67,11 @@ class AgentBrowser:
                 continue
 
     def _resolve_binary(self) -> str:
-        local = ROOT / "node_modules" / ".bin" / "agent-browser"
-        if local.exists():
-            return str(local)
+        bin_dir = ROOT / "node_modules" / ".bin"
+        for name in ("agent-browser", "agent-browser.cmd", "agent-browser.exe", "agent-browser.ps1"):
+            local = bin_dir / name
+            if local.exists():
+                return str(local)
         found = shutil.which("agent-browser")
         if found:
             return found

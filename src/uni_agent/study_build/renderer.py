@@ -28,6 +28,7 @@ def render_draft(draft: DocumentDraft, run_dir: Path, *, output_format: str) -> 
 
 
 def _render_markdown(draft: DocumentDraft) -> str:
+    main_heading = "Lösung" if draft.layout.document_style == "worked_solution" else "Theorie"
     lines = [
         f"# {draft.title}",
         "",
@@ -35,7 +36,7 @@ def _render_markdown(draft: DocumentDraft) -> str:
         "",
         f"Course: {draft.course or 'n/a'}",
         "",
-        "## Theorie",
+        f"## {main_heading}",
         "",
     ]
     for section in draft.sections:
@@ -74,6 +75,7 @@ def _render_markdown(draft: DocumentDraft) -> str:
 
 
 def _render_typst(draft: DocumentDraft) -> str:
+    main_heading = "Lösung" if draft.layout.document_style == "worked_solution" else "Theorie"
     lines = [
         '#set page(paper: "a4", margin: (x: 18mm, y: 16mm), numbering: "1")',
         '#set text(font: "Liberation Serif", size: 10pt, lang: "de")',
@@ -83,7 +85,7 @@ def _render_typst(draft: DocumentDraft) -> str:
         "#v(6mm)",
         f"#text(weight: \"bold\")[Kurs:] {_c(draft.course or 'n/a')}",
         "",
-        "= Theorie",
+        f"= {main_heading}",
         "",
     ]
     for section in draft.sections:

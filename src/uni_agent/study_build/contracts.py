@@ -32,6 +32,8 @@ class UserIntent:
     wants_complete_theory: bool
     quiz_access: QuizAccess
     max_repair_cycles: int
+    requested_sheet_number: int | None = None
+    requested_task_number: int | None = None
 
 
 @dataclass(frozen=True)

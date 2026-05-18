@@ -44,6 +44,10 @@ class CommandProvider:
             "SUBAGENT_SCHEMA_PATH": str(task.schema_path or ""),
             "STUDY_BUILD_PACKET_PATH": str(task.packet_path),
             "STUDY_BUILD_OUTPUT_PATH": str(task.output_path),
+            "STUDY_BUILD_SCHEMA_PATH": str(task.schema_path or ""),
+            "DOCUMENT_BUILD_PACKET_PATH": str(task.packet_path),
+            "DOCUMENT_BUILD_OUTPUT_PATH": str(task.output_path),
+            "DOCUMENT_BUILD_SCHEMA_PATH": str(task.schema_path or ""),
         }
         try:
             completed = subprocess.run(

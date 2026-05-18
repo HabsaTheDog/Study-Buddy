@@ -12,7 +12,7 @@ from .moodle import login, snapshot
 from .providers import provider_diagnostics
 from .quiz import assist_quiz, fill_quiz, verify_quiz
 from .storage import ROOT, create_output_run_dir, ensure_dirs, env_with_dotenv, read_json, write_json
-from .study_build import generate_study_build
+from .document_build import generate_document_build
 from .sync import sync_moodle
 
 
@@ -61,6 +61,25 @@ def main() -> None:
     )
     study_build_parser.add_argument("--max-repair-cycles", type=int, default=3)
     study_build_parser.add_argument("--live-moodle-read", action="store_true")
+    study_build_parser.add_argument(
+        "--template",
+        default="auto",
+        choices=[
+            "auto",
+            "math_worked_solutions",
+            "study_guide",
+            "formula_sheet",
+            "theory_summary",
+            "assignment_brief",
+            "quiz_safe_review",
+        ],
+    )
+    study_build_parser.add_argument(
+        "--sync-policy",
+        default="require-current",
+        choices=["require-current", "no-sync"],
+        help="Source policy for document generation. Default requires current Moodle/material sources and never falls back to output artifacts.",
+    )
 
     activity_parser = subparsers.add_parser("activity-resolve")
     activity_parser.add_argument("prompt", nargs="+")
@@ -121,14 +140,18 @@ def main() -> None:
         )
         print(f"Wrote Moodle sync report to {run_dir}")
     elif args.command == "study-build":
-        run_dir = generate_study_build(
+        run_dir = generate_document_build(
             " ".join(args.prompt),
             output_format=args.format,
             quiz_access=args.quiz_access,
             max_repair_cycles=args.max_repair_cycles,
             live_moodle_read=args.live_moodle_read,
+            template=args.template,
+            sync_policy=args.sync_policy,
         )
-        print(f"Wrote study build to {run_dir}")
+        manifest = read_json(run_dir / "artifacts" / "metadata" / "run-manifest.json", default={})
+        status = manifest.get("status") if isinstance(manifest, dict) else None
+        print(f"Wrote document build ({status or 'unknown'}) to {run_dir}")
     elif args.command == "activity-resolve":
         prompt = " ".join(args.prompt)
         courses = load_synced_courses(refresh_if_missing=True)

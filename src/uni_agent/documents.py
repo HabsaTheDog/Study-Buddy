@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import subprocess
+import sys
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -331,11 +332,11 @@ def refresh_document_index() -> Path:
 
 def install_pdf_dependency_hint() -> str:
     result = subprocess.run(
-        ["python3", "-c", "import pypdf"],
+        [sys.executable, "-c", "import pypdf"],
         cwd=ROOT,
         capture_output=True,
         text=True,
     )
     if result.returncode == 0:
         return "pypdf is installed."
-    return "Optional PDF extraction dependency missing. Install with `python3 -m pip install pypdf`."
+    return "Optional PDF extraction dependency missing. Install with `python -m pip install pypdf`."

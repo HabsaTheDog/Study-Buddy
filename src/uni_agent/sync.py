@@ -8,6 +8,7 @@ from typing import Any
 from .courses import index_courses
 from .documents import discover_material_links, download_course_materials, refresh_document_index
 from .moodle import login
+from .semesters import semester_payload
 from .storage import ROOT, create_output_run_dir, ensure_dirs, read_json, slugify, utc_now, write_json
 from .types import to_jsonable
 
@@ -115,7 +116,8 @@ def _build_course_cards(courses: list[dict[str, Any]], material_courses: list[di
             "course_id": course_id,
             "course_title": course_title,
             "course_url": course.get("url"),
-            "semester": course.get("semester"),
+            "semester": course.get("semester") or (semester_payload(course_title) or {}).get("token"),
+            "semester_period": semester_payload(course.get("semester") or course_title),
             "retrieved_at": material_course.get("retrieved_at"),
             "link_count": len(links),
             "link_counts_by_type": dict(sorted(hint_counts.items())),
@@ -192,6 +194,8 @@ def _write_course_card_markdown(path: Path, card: dict[str, Any]) -> None:
         "",
         f"- Course ID: `{card.get('course_id')}`",
         f"- URL: {card.get('course_url')}",
+        f"- Semester: {card.get('semester')}",
+        f"- Semester period: {card.get('semester_period')}",
         f"- Indexed links: {card.get('link_count')}",
         f"- Link types: {card.get('link_counts_by_type')}",
         "",

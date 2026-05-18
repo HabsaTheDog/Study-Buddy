@@ -3,10 +3,14 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from ..semesters import current_semester_tokens, infer_semester_info, semester_payload
+
 
 def rank_courses(prompt: str, courses: list[dict[str, Any]]) -> list[dict[str, Any]]:
     terms = _terms_from_prompt(prompt)
     prompt_lower = prompt.casefold()
+    current_tokens = current_semester_tokens()
+    has_explicit_semester = bool(re.search(r"\b(?:ss|ws)[-\s]?\d{4}(?:/\d{2,4})?\b|\b(?:sommersemester|wintersemester)\s+\d{4}\b", prompt_lower))
     explicit_course_ids = set(re.findall(r"\b\d{5,6}\b", prompt_lower))
     wants_labor = bool(re.search(r"\b(labor|lab|etlb)\b", prompt_lower))
     wants_et1 = _prompt_requests_numbered_course(prompt_lower, "elektrotechnik", "1") or bool(re.search(r"\bet\s*1\b|\bet1\b", prompt_lower))
@@ -24,6 +28,14 @@ def rank_courses(prompt: str, courses: list[dict[str, Any]]) -> list[dict[str, A
         title = str(course.get("title") or "")
         haystack = title.casefold()
         score = sum(4 for term in terms if term in haystack)
+        semester_info = infer_semester_info(str(course.get("semester") or title))
+        if not has_explicit_semester:
+            if semester_info and semester_info.is_current:
+                score += 18
+            elif any(token in haystack for token in current_tokens):
+                score += 18
+            elif semester_info:
+                score -= 2
         course_id = str(course.get("id") or "")
         if course_id and course_id in explicit_course_ids:
             score += 80
@@ -55,7 +67,12 @@ def rank_courses(prompt: str, courses: list[dict[str, Any]]) -> list[dict[str, A
             if "dyn2" in haystack or "anwendungen der dynamik" in haystack:
                 score += 20
         if score:
-            ranked.append({**course, "score": score})
+            enriched = {**course, "score": score}
+            if not enriched.get("semester"):
+                enriched["semester"] = semester_info.token if semester_info else None
+            if semester_info:
+                enriched["semester_period"] = semester_payload(str(course.get("semester") or title))
+            ranked.append(enriched)
     ranked.sort(key=lambda item: (-item["score"], str(item.get("title") or "")))
     return ranked
 

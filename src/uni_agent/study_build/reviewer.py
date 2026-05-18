@@ -58,6 +58,8 @@ def _deterministic_review(*, bundle: ResourceBundle, draft: DocumentDraft, rende
     if not draft.source_map:
         issues.append({"severity": "error", "code": "sources-missing", "message": "No source map was attached."})
         instructions.append("Attach source_map and source_ids to sections.")
+    if bundle.intent.requested_sheet_number is not None or bundle.intent.requested_task_number is not None:
+        _review_exact_exercise_request(bundle=bundle, draft=draft, issues=issues, instructions=instructions)
     uncited = [section.heading for section in draft.sections if not section.source_ids]
     if uncited:
         issues.append({"severity": "error", "code": "uncited-sections", "message": f"Sections without sources: {', '.join(uncited[:5])}"})
@@ -81,6 +83,55 @@ def _deterministic_review(*, bundle: ResourceBundle, draft: DocumentDraft, rende
         requirements_trace=bundle.coverage_matrix,
         safety=safety,
     )
+
+
+def _review_exact_exercise_request(
+    *,
+    bundle: ResourceBundle,
+    draft: DocumentDraft,
+    issues: list[dict[str, Any]],
+    instructions: list[str],
+) -> None:
+    selected_titles = " ".join(str(source.get("title") or "") for source in draft.source_map).casefold()
+    selected_paths = " ".join(str(source.get("path") or "") for source in draft.source_map).casefold()
+    selected_text = f"{selected_titles} {selected_paths}"
+    if bundle.intent.requested_sheet_number is not None:
+        sheet = bundle.intent.requested_sheet_number
+        if not (
+            f"ue{sheet:02d}" in selected_text
+            or f"ue{sheet}" in selected_text
+            or f"übungsblatt {sheet}" in selected_text
+            or f"uebungsblatt {sheet}" in selected_text
+        ):
+            issues.append(
+                {
+                    "severity": "error",
+                    "code": "requested-sheet-source-missing",
+                    "message": f"Prompt requests Übungsblatt {sheet}, but no matching worksheet source is in source_map.",
+                }
+            )
+            instructions.append(f"Select the matching Übungsblatt {sheet} document as a source before building the answer.")
+    if bundle.intent.requested_task_number is not None:
+        task = bundle.intent.requested_task_number
+        body_text = " ".join([draft.title, draft.subtitle, *[section.heading for section in draft.sections], *[item for section in draft.sections for item in section.body]]).casefold()
+        if f"aufgabe {task}" not in body_text:
+            issues.append(
+                {
+                    "severity": "error",
+                    "code": "requested-task-not-addressed",
+                    "message": f"Prompt requests Aufgabe {task}, but the generated document does not address that task explicitly.",
+                }
+            )
+            instructions.append(f"Build the document around Aufgabe {task}, not a generic theory summary.")
+    if "exact-exercise-fallback-no-worked-solution" in draft.risk_flags:
+        issues.append(
+            {
+                "severity": "error",
+                "code": "worked-solution-missing",
+                "message": "The local fallback only extracted the exercise text; it did not produce a worked solution.",
+            }
+        )
+        instructions.append("Use the builder model to produce a cited worked solution, or report that no worked solution could be generated.")
 
 
 def _merge_model_review(base: ReviewReport, payload: dict[str, Any]) -> ReviewReport:

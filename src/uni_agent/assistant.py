@@ -16,7 +16,7 @@ from .output_runs import artifact_path
 from .preflight import run_moodle_preflight, validate_quiz_activity_url
 from .quiz import assist_quiz, fill_quiz
 from .storage import ROOT, create_output_run_dir, read_json, utc_now, write_json
-from .study_build import generate_study_build
+from .document_build import generate_document_build
 
 
 COURSE_HINTS = {
@@ -95,6 +95,9 @@ def _looks_like_study_build_request(prompt_lower: str) -> bool:
     return any(
         term in prompt_lower
         for term in [
+            "pdf",
+            "document",
+            "dokument",
             "study guide",
             "summary",
             "summarize",
@@ -112,6 +115,14 @@ def _looks_like_study_build_request(prompt_lower: str) -> bool:
             "stoffuebersicht",
             "themenübersicht",
             "themenuebersicht",
+            "kreuzerl",
+            "häkchen",
+            "haekchen",
+            "markiert",
+            "übungen",
+            "uebungen",
+            "übungsblatt",
+            "uebungsblatt",
         ]
     )
 
@@ -137,17 +148,20 @@ def _looks_like_do_request(prompt_lower: str) -> bool:
 
 
 def _handle_study_build_prompt(prompt: str) -> PromptResult:
-    run_dir = generate_study_build(
+    run_dir = generate_document_build(
         prompt,
         output_format="markdown+pdf",
         quiz_access="ask",
         max_repair_cycles=3,
+        template="auto",
+        sync_policy="require-current",
     )
-    payload = read_json(artifact_path(run_dir, "requests", "request.json"), default={})
-    status = payload.get("status") or "completed"
+    manifest = read_json(artifact_path(run_dir, "metadata", "run-manifest.json"), default={})
+    status = manifest.get("status") if isinstance(manifest, dict) else None
+    status = status or "completed"
     return PromptResult(
-        "study-build" if status == "completed" else str(status),
-        f"Generated study build with status {status}",
+        "document-build" if status == "completed" else str(status),
+        f"Generated document build with status {status}",
         run_dir,
     )
 
@@ -190,7 +204,7 @@ def _handle_quiz_prompt(
             "I found a quiz URL and inspected it, but no answer file was provided.",
             suggestions=[
                 f"Fill `{template.relative_to(ROOT)}` with answers, confidence, and citations.",
-                f"Then run: `scripts/study_buddy.sh \"{prompt}\" --answers {template.relative_to(ROOT)} --max-pages {max_pages}`",
+                f"Then run: `npm run study:buddy -- \"{prompt}\" --answers {template.relative_to(ROOT)} --max-pages {max_pages}`",
             ],
             extra={"review_output": str(run_dir.relative_to(ROOT)), "answer_template": str(template.relative_to(ROOT))},
         )
@@ -231,7 +245,7 @@ def _handle_quiz_prompt(
             f"I selected `{selected_course['title']}`, but found no quiz links on the course page.",
             suggestions=[
                 "Paste the quiz URL directly.",
-                "Run `scripts/moodle_course_index.sh` and try again if Moodle changed.",
+                "Run `npm run moodle:courses` and try again if Moodle changed.",
             ],
             extra={"selected_course": selected_course},
         )
@@ -277,7 +291,7 @@ def _handle_quiz_prompt(
             f"Selected course: `{selected_course['title']}`",
             f"Selected quiz: `{target_quiz['title']}`",
             f"Fill `{template.relative_to(ROOT)}` with answers, confidence, and citations.",
-            f"Then run: `scripts/study_buddy.sh \"{prompt}\" --answers {template.relative_to(ROOT)} --max-pages {max_pages}`",
+            f"Then run: `npm run study:buddy -- \"{prompt}\" --answers {template.relative_to(ROOT)} --max-pages {max_pages}`",
         ],
         extra={
             "selected_course": selected_course,

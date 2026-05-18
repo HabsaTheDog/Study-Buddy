@@ -49,6 +49,13 @@ def _coverage(intent: UserIntent, chunks: list[SourceChunk], permission: dict[st
             "source_ids": source_ids,
         }
     ]
+    if "worked_solution" in intent.required_sections:
+        rows[0] = {
+            "requirement": "worked_solution",
+            "status": "covered" if chunks else "missing",
+            "source_ids": source_ids,
+            "note": "Requires a matching worksheet/source page and a generated worked solution.",
+        }
     if intent.wants_quiz_style:
         rows.append(
             {

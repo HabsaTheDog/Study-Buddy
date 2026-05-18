@@ -1,4 +1,5 @@
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -6,10 +7,14 @@ from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
-from uni_agent.providers import AgentTask, resolve_provider
+from uni_agent.providers import AgentTask, provider_diagnostics, resolve_provider
 from uni_agent.providers.command import CommandProvider
 from uni_agent.study_build.model_runner import run_optional_model
 from uni_agent.subagents import _normalize_subagent_answer, _run_subagent
+
+
+def _command(*parts: str) -> str:
+    return subprocess.list2cmdline(list(parts))
 
 
 def _task(root: Path, *, output_name: str = "response.json") -> AgentTask:
@@ -66,23 +71,43 @@ class AgentProviderTests(unittest.TestCase):
                 "open(os.environ['AGENT_OUTPUT_PATH'], 'w', encoding='utf-8').write(json.dumps({'answer': 'ok'}))\n",
                 encoding="utf-8",
             )
-            result = CommandProvider(f"{sys.executable} {script}").run(_task(root))
+            result = CommandProvider(_command(sys.executable, str(script))).run(_task(root))
         self.assertTrue(result.ok)
         self.assertEqual(result.parsed, {"answer": "ok"})
+
+    def test_command_provider_exposes_document_build_env_names(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            script = root / "write_document_output.py"
+            script.write_text(
+                "import json, os\n"
+                "open(os.environ['DOCUMENT_BUILD_OUTPUT_PATH'], 'w', encoding='utf-8').write(json.dumps({'answer': 'doc'}))\n",
+                encoding="utf-8",
+            )
+            result = CommandProvider(_command(sys.executable, str(script))).run(_task(root))
+        self.assertTrue(result.ok)
+        self.assertEqual(result.parsed, {"answer": "doc"})
+
+    def test_provider_diagnostics_include_document_build_section_hook(self):
+        diagnostics = provider_diagnostics({"DOCUMENT_BUILD_SECTION_COMMAND": "printf '{}'"})
+        self.assertIn("document_build_section", diagnostics["selections"])
+        self.assertEqual(diagnostics["selections"]["document_build_section"]["provider"], "command")
 
     def test_command_provider_reads_json_from_stdout(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             script = root / "stdout.py"
             script.write_text("print('{\"answer\": \"stdout\"}')\n", encoding="utf-8")
-            result = CommandProvider(f"{sys.executable} {script}").run(_task(root))
+            result = CommandProvider(_command(sys.executable, str(script))).run(_task(root))
         self.assertTrue(result.ok)
         self.assertEqual(result.parsed, {"answer": "stdout"})
 
     def test_command_provider_allows_inline_json_braces_in_template(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
-            result = CommandProvider("printf '{\"answer\":\"inline\"}'").run(_task(root))
+            script = root / "inline.py"
+            script.write_text("print('{\"answer\":\"inline\"}')\n", encoding="utf-8")
+            result = CommandProvider(_command(sys.executable, str(script))).run(_task(root))
         self.assertTrue(result.ok)
         self.assertEqual(result.parsed, {"answer": "inline"})
 
@@ -91,7 +116,7 @@ class AgentProviderTests(unittest.TestCase):
             root = Path(temp)
             script = root / "invalid.py"
             script.write_text("print('not json')\n", encoding="utf-8")
-            result = CommandProvider(f"{sys.executable} {script}").run(_task(root))
+            result = CommandProvider(_command(sys.executable, str(script))).run(_task(root))
         self.assertFalse(result.ok)
         self.assertEqual(result.reason, "agent-invalid-json")
 
@@ -101,7 +126,7 @@ class AgentProviderTests(unittest.TestCase):
             script = root / "sleep.py"
             script.write_text("import time\ntime.sleep(2)\n", encoding="utf-8")
             task = replace(_task(root), timeout_seconds=1)
-            result = CommandProvider(f"{sys.executable} {script}").run(task)
+            result = CommandProvider(_command(sys.executable, str(script))).run(task)
         self.assertFalse(result.ok)
         self.assertEqual(result.reason, "agent-timeout")
 
@@ -128,7 +153,7 @@ class AgentProviderTests(unittest.TestCase):
                 "open(os.environ['AGENT_OUTPUT_PATH'], 'w', encoding='utf-8').write(json.dumps(payload))\n",
                 encoding="utf-8",
             )
-            command = f"{sys.executable} {script}"
+            command = _command(sys.executable, str(script))
             with patch("uni_agent.study_build.model_runner.env_with_dotenv", return_value={"STUDY_BUILD_BUILDER_COMMAND": command}):
                 result = run_optional_model(
                     command_env="STUDY_BUILD_BUILDER_COMMAND",

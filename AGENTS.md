@@ -241,8 +241,9 @@ Subagent answer generation:
 - Probe configured providers with `scripts/agent_provider_probe.sh` or `python3 -m uni_agent.orchestrator providers`.
 - Existing command hooks remain supported and take precedence over provider selection:
   - `SUBAGENT_SOLVER_COMMAND`
-  - `STUDY_BUILD_BUILDER_COMMAND`
-  - `STUDY_BUILD_REVIEWER_COMMAND`
+  - `DOCUMENT_BUILD_SECTION_COMMAND`
+  - legacy `STUDY_BUILD_BUILDER_COMMAND`
+  - legacy `STUDY_BUILD_REVIEWER_COMMAND`
 
 Unsupported questions must be reported as unfilled rather than guessed.
 

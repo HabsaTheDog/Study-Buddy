@@ -3,9 +3,10 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 export PYTHONPATH="${PYTHONPATH:-}:$PWD/src"
+PYTHON_BIN="${PYTHON:-python3}"
 
 if [[ $# -gt 0 ]]; then
-  python3 -m uni_agent.orchestrator snapshot "$1"
+  "$PYTHON_BIN" -m uni_agent.orchestrator snapshot "$1"
 else
-  python3 -m uni_agent.orchestrator snapshot
+  "$PYTHON_BIN" -m uni_agent.orchestrator snapshot
 fi

@@ -85,6 +85,7 @@ def _course_from_card(card: dict[str, Any]) -> dict[str, Any]:
         "title": card.get("course_title"),
         "url": card.get("course_url"),
         "semester": card.get("semester"),
+        "semester_period": card.get("semester_period"),
         "agent_brief": card.get("agent_brief"),
         "sync_retrieved_at": card.get("retrieved_at"),
         "link_counts_by_type": card.get("link_counts_by_type"),

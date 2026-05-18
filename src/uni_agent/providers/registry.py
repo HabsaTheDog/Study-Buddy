@@ -84,6 +84,7 @@ def provider_diagnostics(env: dict[str, str]) -> dict[str, Any]:
     selections = {}
     for kind, command_env, provider_env in [
         ("quiz_subagent", "SUBAGENT_SOLVER_COMMAND", "SUBAGENT_SOLVER_PROVIDER"),
+        ("document_build_section", "DOCUMENT_BUILD_SECTION_COMMAND", "DOCUMENT_BUILD_SECTION_PROVIDER"),
         ("study_build_builder", "STUDY_BUILD_BUILDER_COMMAND", "STUDY_BUILD_BUILDER_PROVIDER"),
         ("study_build_reviewer", "STUDY_BUILD_REVIEWER_COMMAND", "STUDY_BUILD_REVIEWER_PROVIDER"),
     ]:

@@ -53,6 +53,12 @@ class StudyBuildIntentTests(unittest.TestCase):
         self.assertEqual(permission["status"], "disabled")
         self.assertFalse(permission["allowed"])
 
+    def test_extracts_exact_exercise_request(self):
+        intent = parse_user_intent("Mathe Aufgabe 4 von Übungsblatt 8 als PDF lösen", quiz_access="ask", max_repair_cycles=3)
+        self.assertEqual(intent.requested_sheet_number, 8)
+        self.assertEqual(intent.requested_task_number, 4)
+        self.assertIn("worked_solution", intent.required_sections)
+
 
 class StudyBuildResourceTests(unittest.TestCase):
     def test_elektrotechnik_2_prompt_prefers_et2_course(self):
@@ -74,6 +80,22 @@ class StudyBuildResourceTests(unittest.TestCase):
         self.assertIn("ET2", ranked[0]["title"])
         self.assertNotIn("Labor", ranked[0]["title"])
 
+    def test_current_semester_breaks_generic_math_tie(self):
+        courses = [
+            {
+                "id": "30605",
+                "title": "BMR-VZ-1-WS2025-MAES1-DE/159281 Mathematik für Engineering Science 1",
+            },
+            {
+                "id": "32274",
+                "title": "BMR-VZ-2-SS2026-MAES2-DE/165575 Mathematik für Engineering Science 2",
+            },
+        ]
+        with patch.dict("os.environ", {"STUDY_BUDDY_TODAY": "2026-05-12"}):
+            ranked = rank_courses("mathe aufgabe 4 von übungsblatt 8", courses)
+        self.assertEqual(ranked[0]["id"], "32274")
+        self.assertEqual(ranked[0]["semester"], "SS2026")
+
     def test_classifies_datasheets_outside_theory(self):
         self.assertEqual(classify_resource_role("BC546-50_Datenblatt.pdf"), "datasheet")
         self.assertEqual(classify_resource_role("ComplexNumbers.pdf"), "theory")
@@ -89,6 +111,52 @@ class StudyBuildResourceTests(unittest.TestCase):
         self.assertEqual(statuses["Moodle quizzes/tests"], "authorization_required")
         self.assertEqual(statuses["BC546-50_Datenblatt.pdf"], "available_not_used")
         self.assertEqual(len(bundle.source_chunks), 1)
+
+    def test_exact_worksheet_request_selects_matching_ue_document(self):
+        courses = [
+            {
+                "id": "32274",
+                "title": "BMR-VZ-2-SS2026-MAES2-DE/165575 Mathematik für Engineering Science 2",
+                "url": "https://moodle.example/course/view.php?id=32274",
+            }
+        ]
+        document_index = {
+            "documents": [
+                {
+                    "name": "Embacher_Warmup-Gesamtskriptum.pdf",
+                    "path": "data/moodle/materials/bmr-vz-2-ss2026-maes2-de-165575-mathematik-fur-engineering-science-2/Embacher_Warmup-Gesamtskriptum.pdf",
+                    "suffix": ".pdf",
+                    "pages": [{"page": 1, "text": "Allgemeine Theorie zu Funktionen."}],
+                },
+                {
+                    "name": "MAES2_UE07.pdf",
+                    "path": "data/moodle/materials/bmr-vz-2-ss2026-maes2-de-165575-mathematik-fur-engineering-science-2/MAES2_UE07.pdf",
+                    "suffix": ".pdf",
+                    "pages": [{"page": 1, "text": "Übungsaufgaben zu Thema 7 Aufgabe 4 Ein anderes Integral."}],
+                },
+                {
+                    "name": "MAES2_UE08.pdf",
+                    "path": "data/moodle/materials/bmr-vz-2-ss2026-maes2-de-165575-mathematik-fur-engineering-science-2/MAES2_UE08.pdf",
+                    "suffix": ".pdf",
+                    "pages": [
+                        {"page": 1, "text": "Übungsaufgaben zu Thema 8 Integralrechnung 3 Aufgabe 4 Untersuchen Sie das Integral."},
+                        {"page": 2, "text": "Aufgabe 5 Berechnen Sie weitere Integrale."},
+                    ],
+                },
+            ]
+        }
+        intent = parse_user_intent("Mathe Aufgabe 4 von Übungsblatt 8 als PDF lösen", quiz_access="ask", max_repair_cycles=3)
+        with patch("uni_agent.study_build.resource_tools.load_synced_courses", return_value=courses), patch(
+            "uni_agent.study_build.resource_tools.read_json", return_value=document_index
+        ), patch.dict("os.environ", {"STUDY_BUDDY_TODAY": "2026-05-12"}):
+            bundle, ambiguous = build_resource_bundle(intent)
+        self.assertEqual(ambiguous, [])
+        statuses = {resource.title: resource.status for resource in bundle.resources}
+        self.assertEqual(statuses["MAES2_UE08.pdf"], "selected")
+        self.assertEqual(statuses["MAES2_UE07.pdf"], "available_not_used")
+        self.assertEqual(statuses["Embacher_Warmup-Gesamtskriptum.pdf"], "available_not_used")
+        self.assertEqual([chunk.title for chunk in bundle.source_chunks], ["MAES2_UE08.pdf"])
+        self.assertEqual(bundle.coverage_matrix[0]["requirement"], "worked_solution")
 
 
 if __name__ == "__main__":

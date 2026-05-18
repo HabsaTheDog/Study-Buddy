@@ -13,6 +13,7 @@ __all__ = [
     "quiz",
     "safety",
     "storage",
+    "document_build",
     "study_build",
     "sync",
     "subagents",
